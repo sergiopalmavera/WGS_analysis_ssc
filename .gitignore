@@ -55,4 +55,6 @@ tmp*
 *.NBP
 tst.sh
 test.sh
+*.swp
+*.nfs*
 
