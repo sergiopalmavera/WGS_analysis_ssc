@@ -58,3 +58,4 @@ test.sh
 *.swp
 *.nfs*
 
+.Rproj.user
