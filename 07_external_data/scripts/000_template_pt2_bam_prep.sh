@@ -64,10 +64,6 @@ time java -jar $PICARD/picard.jar AddOrReplaceReadGroups \
 	RGPU=$PU
 printf "\n"
 
-echo "### Indexing BAM file ..."
-samtools index $TMP/$tmp_sub/$bam_rg
-printf "\n"
-
 tmp_sub_picard=${tmp_sub}_picard # tmp file for picard
 mkdir $TMP/$tmp_sub/$tmp_sub_picard
 
@@ -81,6 +77,10 @@ time java -jar $PICARD/picard.jar SortSam \
 	TMP_DIR=$TMP/$tmp_sub/$tmp_sub_picard
 printf "\n"
 
+echo "### Indexing BAM file ..."
+samtools index $TMP/$tmp_sub/$bam_rg_sort
+printf "\n"
+
 bam_rg_sort_dedup=${bam_nm/.bam/.RG.sorted.dedup.bam}
 
 echo "### Marking duplicates ..."
@@ -90,9 +90,3 @@ time java -jar $PICARD/picard.jar MarkDuplicates \
 	M=$FINAL/${bam_rg_sort_dedup/.bam/.metrics.txt} \
 	TMP_DIR=$TMP/$tmp_sub/$tmp_sub_picard
 	printf "\n"
-
-
-v
-
-v
-

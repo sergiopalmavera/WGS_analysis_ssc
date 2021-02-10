@@ -8,13 +8,9 @@ sample_id=$1
  
 # Define relative paths 
 REF=../../ref_ensemble95/
-TMP=../output/TMP
-FINAL=../output/FINAL
-tmp_sub=tmp_${sample_id} #temp dir for this sample
 
 # define bam
-tmp_sub=tmp_${sample_id} #temp dir for this sample
-bam=$(echo $TMP/$tmp_sub/*.sorted.dedup.bam) # find bam
+bam_nm=$sample_id.RG.merged.sorted.dedup.bam
 
 echo "# Processing sample $sample_id prepared bam file $bam"
 
@@ -30,29 +26,27 @@ hostname
 date
 printf "\n"
 
-bam_nm=$(basename $bam) # keep only the bam name
-
 echo "### BaseRecalibrator ..."
 time $GATK/gatk BaseRecalibrator \
 	-R $REF/Sus_scrofa.Sscrofa11.1.dna.toplevel.fa \
-	-I $bam \
+	-I ../output/$bam_nm \
 	--known-sites $REF/variation/sus_scrofa_NoWhiteSpacesInINFO_sorted.vcf \
-	-O $FINAL/${bam_nm/.bam/.bqsr.table} 
+	-O ../output/${bam_nm/.bam/.bqsr.table} 
 printf "\n"
 
 echo "### ApplyBQSR ..."
 time $GATK/gatk ApplyBQSR \
 	-R $REF/Sus_scrofa.Sscrofa11.1.dna.toplevel.fa \
-	-I $bam \
-	--bqsr-recal-file $FINAL/${bam_nm/.bam/.bqsr.table} \
-	-O $FINAL/${bam_nm/.bam/.bqsr.bam}
+	-I ../output/$bam_nm \
+	--bqsr-recal-file ../output/${bam_nm/.bam/.bqsr.table} \
+	-O ../output/${bam_nm/.bam/.bqsr.bam}
 printf "\n"
 
 echo "### HaplotypeCaller on bam $bam_nm ..."
 time $GATK/gatk HaplotypeCaller \
 	-R $REF/Sus_scrofa.Sscrofa11.1.dna.toplevel.fa \
-	-I $FINAL/${bam_nm/.bam/.bqsr.bam} \
-	-O $FINAL/${bam_nm/.bam/.bqsr.g.vcf} \
+	-I ../output/${bam_nm/.bam/.bqsr.bam} \
+	-O ../output/${bam_nm/.bam/.bqsr.g.vcf} \
 	-ERC GVCF
 printf "\n"
 

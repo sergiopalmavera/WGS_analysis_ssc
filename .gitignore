@@ -24,6 +24,7 @@
 *.table
 *.idx
 *.sorted.dedup.metrics.txt
+*.metrics
 *.pid
 *.intervals
 *.frq
@@ -40,6 +41,7 @@ rsconnect/
 *.pdf
 *.png
 tmp*
+tmp
 *.imiss
 *.lmiss
 *.rds
@@ -54,8 +56,8 @@ tmp*
 *.NR
 *.NBP
 tst.sh
+tst
 test.sh
 *.swp
 *.nfs*
-
 .Rproj.user
