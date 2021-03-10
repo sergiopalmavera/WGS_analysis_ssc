@@ -1,0 +1,192 @@
+---
+title: "WGS DU-mice"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: columns
+---
+
+
+```{r results="asis"}
+cat("
+<style>
+caption {
+      color: black;
+      font-weight: bold;
+      font-size: 1.0em;
+    }
+</style>
+")
+```
+
+
+```{r, setup, include=F} 
+
+library(ggplot2)
+library(dplyr)
+library(here)
+library(vroom)
+library(gridExtra)
+library(reshape2)
+library(knitr)
+library(kableExtra)
+library(stringr)
+library(plotly)
+library(data.table)
+library(UpSetR)
+library(grid)
+library(ape)
+library(GenomicRanges)
+library(DT)
+library(patchwork) #install.packages("patchwork")
+options(scipen=999)
+```
+
+
+Hard Filtering
+================
+
+Column {.tabset}
+----------------
+
+### Intro
+
+* In this part of the analysis, raw SNPs are site-filtered by applying hard filters.
+
+* Each filter was based on trimming ~10% of the worst variants, following the recomendations of GATK: https://gatk.broadinstitute.org/hc/en-us/articles/360035890471-Hard-filtering-germline-short-variants
+
+* VQSR was not persued, as ~20M SNPs remain after hard-filtering, which is a reasonable number. Going for VQSR would've been an overkill.
+
+```{r import_site_annotations, include = FALSE}
+
+raw_biallele_snps_annot <- here("09_VariantQualityScoreRecalibration/output/cohort_biallelicSNPs.table") %>% vroom()
+
+```
+
+```{r find_cutoffs, eval=FALSE}
+# https://gatk.broadinstitute.org/hc/en-us/articles/360035890471-Hard-filtering-germline-short-variants
+
+# 10% worst QD
+QD_cutoff <- raw_biallele_snps_annot$QD %>% quantile(0.10, na.rm=TRUE)
+
+# FS closest to 0, the better - min is 0 - remove worst 10%
+raw_biallele_snps_annot$FS %>% range()
+FS_cutoff <- raw_biallele_snps_annot$FS %>% quantile(0.90)
+
+# SOR - min is 0 - remove worst 10%
+raw_biallele_snps_annot$SOR %>% range()
+SOR_cutoff <- raw_biallele_snps_annot$SOR %>% quantile(0.90)
+
+# MQ - 60 is optimal - trim bottom 10% and top 1%
+raw_biallele_snps_annot$MQ %>% summary()
+MQ_cutoffs <- raw_biallele_snps_annot$MQ %>% quantile(c(0.10,0.99), na.rm=TRUE)
+
+
+# MQRankSum - zero is best - trim bottom 5% and top 1%
+raw_biallele_snps_annot$MQRankSum %>% summary()
+MQRankSum_cutoffs <- raw_biallele_snps_annot$MQRankSum %>% quantile(c(0.05, 0.99), na.rm = TRUE)
+
+
+# ReadPosRankSum - zero is best - 
+raw_biallele_snps_annot$ReadPosRankSum %>% summary()
+ReadPosRankSum_cutoffs <- raw_biallele_snps_annot$ReadPosRankSum %>% quantile(c(0.05,0.95), na.rm=TRUE)
+
+```
+
+### vis_raw_annot
+
+```{r export_hard_filter_interivals, eval = FALSE}
+
+raw_biallele_snps_annot %>% 
+  filter(QD > QD_cutoff & FS < FS_cutoff & SOR < SOR_cutoff) %>% 
+  filter(MQ > MQ_cutoffs["10%"] & MQ < MQ_cutoffs["99%"]) %>% 
+  filter(MQRankSum >  MQRankSum_cutoffs["5%"] & MQRankSum < MQRankSum_cutoffs["99%"]) %>% 
+  filter(ReadPosRankSum > ReadPosRankSum_cutoffs["5%"] & ReadPosRankSum < ReadPosRankSum_cutoffs["95%"]) %>% 
+  # extract intervals for VCF filtering
+  mutate(tmp = POS) %>% 
+  dplyr::select(CHROM, POS, tmp) %>% 
+  write.table(file = here("09_VariantQualityScoreRecalibration/output/hard_filters.intervals"), quote = FALSE, row.names = FALSE, col.names = FALSE)
+  
+```
+
+
+```{r density_plots_raw_annot, eval = FALSE}
+
+plot_QD <- raw_biallele_snps_annot %>% 
+  dplyr::select(-CHROM, -POS, -FILTER) %>% 
+  dplyr::select(QD) %>% 
+  ggplot(aes(x = QD)) +
+    geom_density() +
+    geom_vline(xintercept = QD_cutoff, color = "red") + 
+    theme_bw(base_size = 12) 
+
+plot_FS <- raw_biallele_snps_annot %>% 
+  dplyr::select(-CHROM, -POS, -FILTER) %>% 
+  dplyr::select(FS) %>% 
+  ggplot(aes(x = FS)) +
+    geom_density() +
+    geom_vline(xintercept = FS_cutoff, color = "red") + 
+    theme_bw(base_size = 12) 
+
+plot_log10FS <- raw_biallele_snps_annot %>% 
+  dplyr::select(-CHROM, -POS, -FILTER) %>% 
+  mutate(log10FS = log10(FS)) %>% 
+  dplyr::select(log10FS) %>% 
+  ggplot(aes(x = log10FS)) +
+    geom_density() +
+    geom_vline(xintercept = log10(FS_cutoff), color = "red") + 
+    theme_bw(base_size = 12) 
+
+
+plot_MQ <- raw_biallele_snps_annot %>% 
+  dplyr::select(-CHROM, -POS, -FILTER) %>% 
+  dplyr::select(MQ) %>% 
+  ggplot(aes(x = MQ)) +
+    geom_density() +
+    geom_vline(xintercept = MQ_cutoffs, color = "red") + 
+    theme_bw(base_size = 12) 
+
+plot_MQRankSum <- raw_biallele_snps_annot %>% 
+  dplyr::select(-CHROM, -POS, -FILTER) %>% 
+  dplyr::select(MQRankSum) %>% 
+  ggplot(aes(x = MQRankSum)) +
+    geom_density() +
+    geom_vline(xintercept = MQRankSum_cutoffs, color = "red") + 
+    theme_bw(base_size = 12) 
+
+plot_ReadPosRankSum <- raw_biallele_snps_annot %>% 
+  dplyr::select(-CHROM, -POS, -FILTER) %>% 
+  dplyr::select(ReadPosRankSum) %>% 
+  ggplot(aes(x = ReadPosRankSum)) +
+    geom_density() +
+    geom_vline(xintercept = ReadPosRankSum_cutoffs, color = "red") + 
+    theme_bw(base_size = 12) 
+
+plot_SOR <- raw_biallele_snps_annot %>% 
+  dplyr::select(-CHROM, -POS, -FILTER) %>% 
+  dplyr::select(SOR) %>% 
+  ggplot(aes(x = SOR)) +
+    geom_density() +
+    geom_vline(xintercept = SOR_cutoff, color = "red") + 
+    theme_bw(base_size = 12) 
+
+
+png(here("09_VariantQualityScoreRecalibration/figures/plot_annot_all.png"),res=300, height = 3000, width = 3000, units = "px")
+grid.arrange(plot_QD, plot_FS,plot_log10FS, 
+             plot_MQ, plot_MQRankSum, plot_ReadPosRankSum,
+             plot_SOR,
+             ncol = 3)
+dev.off()
+
+```
+
+```{r display_density_plots_raw_annot, fig.align="center"}
+
+include_graphics(here("09_VariantQualityScoreRecalibration/figures/plot_annot_all.png"))
+
+```
+
+
+
+
+
+
