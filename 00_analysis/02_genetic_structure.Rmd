@@ -1,0 +1,235 @@
+---
+title: "Genetic Structure"
+output: rmdformats::robobook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(dplyr)
+library(ggplot2)
+library(vroom)
+library(stringr)
+library(here)
+library(ape)
+library(ggpubr)
+library(knitr)
+
+sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv"))
+```
+
+# Data set structure
+
+Samples were collected by the SOSFERT project, plus external data to increase the sample size and the number of breeds. A total of 104 samples were used for SNP calling.
+
+```{r}
+sample_info %>% 
+  group_by(breed, project) %>% 
+  summarise(n = n()) %>% 
+  reshape2::dcast(project ~ breed, value.var = "n") %>% 
+  janitor::adorn_totals(where = c("row","col")) %>% 
+  kable()
+```
+
+
+# Principal Component Analysis 
+
+```{r}
+
+pc_pct <- here("11_genetic_str/output/pc_pct.csv") %>% read.csv()
+
+pc_eigenscores <- here("11_genetic_str/output/pc_eigenscores.csv") %>% read.csv() %>% 
+  inner_join(sample_info, by = c("sample.id"="sample_id"))
+
+```
+
+### Scree Plot 
+
+The first PC contains ~9% of the variance. PC1-4 together amount to ~25% of the variance. The first 7 PCs have ~30% of the variance.
+
+```{r, fig.height=5, fig.width=5} 
+pc_pct %>% 
+  ggplot(aes(x=PC,y=varprop)) +
+    geom_bar(stat = "identity") +
+    xlab("Principal Component") +
+    ylab("% Variance") +
+    scale_x_continuous(breaks = 1:7) +
+    theme_bw()
+```
+
+
+### PCA plots colored by breed
+
+Breeds are well clustered along PC1-2, PC3-4. However, along PC5 samples breeds cannot be differentiated anymore, and along PC6 European wild boars depart from the other breeds.
+ 
+```{r, fig.height=3, fig.width=8}
+p1 <- pc_eigenscores %>% 
+        ggplot(data = ., aes(x=PC1,y=PC2,color=breed)) +
+          geom_point() +
+          theme_bw(base_size = 12) +
+          theme(legend.title = element_blank())
+
+p2 <- pc_eigenscores %>% 
+        ggplot(data = ., aes(x=PC3,y=PC4,color=breed)) +
+          geom_point() +
+          theme_bw(base_size = 12) +
+          theme(legend.title = element_blank())
+
+p3 <- pc_eigenscores %>% 
+        ggplot(data = ., aes(x=PC5,y=PC6,color=breed)) +
+          geom_point() +
+          theme_bw(base_size = 12) +
+          theme(legend.title = element_blank())
+
+
+
+#ggarrange(p1,p4, p2,p5, p3,p6, ncol = 2, nrow = 3)
+
+
+ggarrange(p1,p2, p3, ncol = 3, nrow = 1, common.legend = TRUE)
+
+
+
+```
+
+### PCA plots colored by project
+
+Projects seem to be well mixed, consider that each breed is represented by only a few projects. 
+
+```{r, fig.height=3, fig.width=8}
+
+p4 <- pc_eigenscores %>% 
+        ggplot(data = ., aes(x=PC1,y=PC2,color=project)) +
+          geom_point() +
+          theme_bw(base_size = 12) +
+          theme(legend.title = element_blank())
+
+p5 <- pc_eigenscores %>% 
+        ggplot(data = ., aes(x=PC3,y=PC4,color=project)) +
+          geom_point() +
+          theme_bw(base_size = 12) +
+          theme(legend.title = element_blank())
+
+p6 <- pc_eigenscores %>% 
+        ggplot(data = ., aes(x=PC5,y=PC6,color=project)) +
+          geom_point() +
+          theme_bw(base_size = 12) +
+          theme(legend.title = element_blank())
+
+ggarrange(p4,p5, p6, ncol = 3, nrow = 1, common.legend = TRUE)
+
+```
+
+
+# Hierarchical Clustering
+
+There are five clusters, one for every breed.
+
+```{r prepare_dendrogram_data, include=FALSE}
+dend <- readRDS(here("11_genetic_str/output/dendrogram_full_snp_set.rds")) %>% as.hclust()
+
+# change labels to group to avoid legend, re-order labels
+sample_info_hc_sorted <- sample_info[match(dend[["labels"]], sample_info$sample_id),]
+identical(sample_info_hc_sorted$sample_id, dend[["labels"]]) #check order of labels is the same! yes!
+
+dend[["labels"]] <- sample_info_hc_sorted$breed
+```
+
+
+```{r} 
+# colors based on palette Dark2 used later for admixture
+colrs <- c("#7570B3","#66A61E", "#1B9E77", "#D95F02", "#E7298A")
+names(colrs) <- sample_info_hc_sorted$breed %>% unique()
+
+# make 5 clusters
+clus5 <- cutree(dend, 5)
+
+# add colors by cluster, matching line with corresponding color
+colrs_tip <- colrs[names(clus5)]
+
+# Shorten label
+dend[["labels"]][dend[["labels"]] == "European Wild Boar"] <- "EWB"
+dend[["labels"]][dend[["labels"]] == "Pietrain"] <- "PI"
+dend[["labels"]][dend[["labels"]] == "Large White"] <- "LW"
+dend[["labels"]][dend[["labels"]] == "Landrace"] <- "LR"
+dend[["labels"]][dend[["labels"]] == "Duroc"] <- "DU"
+
+plot(as.phylo(dend), 
+     type = "fan", 
+     cex = 0.6,
+     no.margin = TRUE,
+     tip.color = colrs_tip)
+
+# good reference: http://www.sthda.com/english/wiki/beautiful-dendrogram-visualizations-in-r-5-must-known-methods-unsupervised-machine-learning
+```
+
+# ADMIXTURE
+
+Starting from two ancestral population, EWB has an equal ancestry proportion. Breeds are represented almost uniquely by one ancestor, with very little admixture.
+
+As the number of ancestral populations increase, so does the level of admixture in landrance. However, the rest of breeds and EWB display very little admixture.
+
+EWB did not represent breeds as expected. 
+
+
+```{r import_fam_info}
+# About sample ordering: https://www.biostars.org/p/221817/
+
+fam_fl <- read.table(here("11_genetic_str/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_header_fixed.fam"))
+```
+
+```{r make_ancestry_barplot_function}
+make_ancestry_barplot <- function(k){
+
+#k=2
+  
+  q_fl=here(paste0("11_genetic_str/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_header_fixed.",k,".Q"))
+  
+  k_dat <- read.table(q_fl) %>% 
+    bind_cols(
+      dplyr::select(fam_fl, V2) %>% dplyr::rename(sample_id = V2)
+      ) %>% 
+    left_join(sample_info, by = "sample_id") %>% 
+    reshape2::melt(id.vars = c("sample_id","breed","project")) %>% 
+    mutate(breed = factor(breed, levels = c("European Wild Boar","Large White","Landrace","Pietrain","Duroc"))) %>% 
+    arrange(breed, sample_id)
+  
+  k_dat %>% 
+    ggplot(aes(x = sample_id, y = value,fill = variable)) +
+    geom_bar(stat = "identity", position = "stack", width = 1) +
+    theme_bw(base_size = 12) +
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+      legend.position = "none",
+      plot.title = element_text(hjust = 0.5)
+    ) +
+    xlab(NULL) +
+    ylab("Ancestry Fraction") +
+    ggtitle(paste0("K=",k)) +
+    scale_y_continuous(expand = c(0.005,0.005), breaks = seq(0,1,0.2)) +
+    scale_fill_brewer(palette = "Dark2") +
+    facet_grid(~breed, scales = "free") +
+    theme(panel.spacing = unit(1/15, "lines"),
+          strip.background = element_blank(), 
+          panel.border = element_blank(),
+          panel.grid = element_blank(),
+          axis.text.x = element_blank()) 
+  }
+
+```
+
+
+### Ancestry fraction (k2 - k6)
+```{r, fig.height=10, fig.width=7}
+ggarrange(make_ancestry_barplot(2),
+          make_ancestry_barplot(3),
+          make_ancestry_barplot(4),
+          make_ancestry_barplot(5),
+          make_ancestry_barplot(6), ncol = 1, nrow = 5)
+```
+
+
+
+
+
+
