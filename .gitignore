@@ -24,7 +24,7 @@
 *.table
 *.idx
 *.sorted.dedup.metrics.txt
-*.metrics
+*metrics
 *.pid
 *.intervals
 *.frq
@@ -61,3 +61,5 @@ test.sh
 *.swp
 *.nfs*
 .Rproj.user
+*.tsv
+*.header
