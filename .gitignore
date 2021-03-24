@@ -63,3 +63,7 @@ test.sh
 .Rproj.user
 *.tsv
 *.header
+*.ld
+*.roh
+*.tab*
+*.tsv
