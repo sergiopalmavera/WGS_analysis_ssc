@@ -1,0 +1,91 @@
+---
+title: "Data description"
+output: rmdformats::robobook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(dplyr)
+library(vroom)
+library(here)
+library(knitr)
+
+sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv"))
+
+```
+
+# Data structure
+
+Samples were collected by the SOSFERT project, plus external data to increase the sample size and the number of breeds. A total of 104 samples were used for SNP calling.
+
+The main goal is to find common genomic regions among dam lines, and common genomic regions of among sire lines, indicative of selection (low diversity, high genetic differentiation), in which genes or QTLs have been described to be associated with reproduction.
+
+Dam lines have been selected to be highly prolific while sire lines (selected for muscle mass) must be able to contribute with good sperm quality, as they are used as terminal lines.
+
+```{r}
+sample_info %>% 
+  group_by(breed, project) %>% 
+  summarise(n = n()) %>% 
+  reshape2::dcast(project ~ breed, value.var = "n") %>% 
+  janitor::adorn_totals(where = c("row","col")) %>% 
+  kable()
+```
+
+
+# Projects
+
+### SOSFERT
+This is FBN's Signatures Of Selection of Fertlity. There are 10 animals per breed (Large White and Pietrain). Data has not been published.
+
+It was sequenced at very high coverage (~50x). However, since the rest of the sampels were sequenced at much lower coverages, a large amount of variants were not used for the downstream analyses.
+
+### PRJNA260763
+https://www.ebi.ac.uk/ena/browser/view/PRJNA260763
+
+
+This project was described in the paper:
+
+Kim H, Song KD, Kim HJ, et al. Exploring the genetic signature of body size in Yucatan miniature pig. PLoS One. 2015;10(4):e0121732. Published 2015 Apr 17. doi:10.1371/journal.pone.0121732
+
+"We used next generation sequencing data of 15 Yorkshires, 13 Landraces, 10 wild boars, 20 Durocs and 12 Yucatan miniature pigs to total 70 individuals."
+
+The project is also found under the SRA id SRP047260:
+https://www.ncbi.nlm.nih.gov/sra/SRX703541[accn]
+
+This project contributed with 31 samples: 20 Durocs and 11 Landraces (the paper indicates 13, but 2 failed the quality control).
+
+They also have wild boards but they are of korean origin. They were not included in the analysis because breeds are of european origin, therefore the corresponding outgroup was the european wild boar.
+
+
+### PRJEB1683 
+
+This project contributed samples for each group (4 Duroc, 17 EWB, 5 LR, 14 LW and 5 PT), 45 samples in total.
+
+https://www.ebi.ac.uk/ena/browser/view/PRJEB1683
+
+Groenen MA, Archibald AL, Uenishi H, et al. Analyses of pig genomes provide insight into porcine demography and evolution. Nature. 2012;491(7424):393-398. doi:10.1038/nature11622
+
+  * "Genome re-sequencing was targeted at a depth of around 8-10x (for details see Bosse et al., 2012)."
+
+Bosse M, Megens HJ, Madsen O, et al. Regions of homozygosity in the porcine genome: consequence of demography and the recombination landscape. PLoS Genet. 2012;8(11):e1003100. doi:10.1371/journal.pgen.1003100
+
+  * "The five European pig breeds Duroc, Hampshire, Large White, Pietrain, and Landrace were represented by 4, 2, 13, 5 and 5 individuals, respectively." 
+
+  * " A total of six animals from European wild boar populations from four distinct populations from the Netherlands, France and Italy were included as a separate group" ==> 4*4 = 16
+  
+  * "The data has been deposited to the Sequence Read Archive (SRA) at EBI, under accession number ERP001813 (link: http://www.ebi.ac.uk/ena/data/view/ERP001813). "
+  
+    * This link leads to https://www.ebi.ac.uk/ena/browser/view/PRJEB1683
+  
+  
+### PRJEB9326  
+
+This project contributed wth 8 PT samples.
+
+Bosse M, Megens HJ, Madsen O, et al. Using genome-wide measures of coancestry to maintain diversity and fitness in endangered and domestic pig populations. Genome Research. 2015 Jul;25(7):970-981. DOI: 10.1101/gr.187039.114.
+
+"We used resequencing data from seven S. cebifrons individuals, genotypes from 46, and sequence data from 11 individuals of the Pietrain breed of S. scrofa."
+
+
+

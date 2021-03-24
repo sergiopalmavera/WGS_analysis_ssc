@@ -1,0 +1,204 @@
+---
+title: "LD and ROH"
+output: rmdformats::robobook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(dplyr)
+library(ggplot2)
+library(vroom)
+library(stringr)
+library(here)
+library(ggpubr)
+library(knitr)
+
+sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv"))
+
+genome_length <- 2501912388 #Golden Path Length	2,501,912,388 (Sscrofa11.1)
+```
+
+Analysis of Linkage Disequilibrium and Runs of Homozygosity
+
+# Linkage Disequilibrium (LD)
+
+LD between SNPs at least 20Kb and up tp 5Mb appart.
+
+```{r display_LD_plot, out.width="80%", fig.align="center"}
+
+# plot done externally on HPC cluster. See corresponding directory output.
+
+knitr::include_graphics(here("12_LD_ROH/output", "LD_trends_max5Mb.png"))
+
+```
+
+# Runs of Homozygosity (ROH)
+
+```{r ROH_import_regions, include=FALSE}
+
+roh_dat <- vroom(here("12_LD_ROH/output/ROH_regions.table"), col_types = c(`[3]Chromosome`="c")) %>% 
+  dplyr::rename(RG = `# RG`, sample = `[2]Sample`, chr = `[3]Chromosome`, start = `[4]Start`, end = `[5]End`, length_bp = `[6]Length (bp)`,
+                n_markers = `[7]Number of markers`, qual_avg_fwd_bwd_phred = `[8]Quality (average fwd-bwd phred score)`) %>% 
+  filter(RG != "# RG") %>% 
+  inner_join(
+    
+    # include an ordered-naming for later when plotting all samples together (i.e. boxplot)
+    sample_info %>% 
+      group_by(breed) %>% 
+      mutate(breed = ifelse(breed == "Duroc", "DU", breed),
+             breed = ifelse(breed == "Pietrain", "PI", breed),
+             breed = ifelse(breed == "Landrace", "LR", breed),
+             breed = ifelse(breed == "Large White", "LW", breed),
+             breed = ifelse(breed == "European Wild Boar", "EWB", breed)) %>% 
+      mutate(breed = factor(breed, levels = c("EWB","LW","LR","PI","DU")) ) %>% 
+      arrange(breed, sample_id), 
+
+    by = c("sample" = "sample_id"))
+
+
+dim(roh_dat) # 465875     11
+```
+
+
+### ROH length distribution (< 1Mb)
+```{r hist_check_roh_length_bp_distribution, fig.width=10, fig.height=10} 
+
+xx <- roh_dat %>% 
+  group_by(breed) %>% 
+  arrange(breed) %>% 
+  dplyr::select(sample) %>% 
+  unique() %>% 
+  mutate(sample_n = row_number())
+
+roh_dat %>% 
+  inner_join(xx, by = c("breed","sample")) %>% 
+  filter(length_bp < 1e6) %>% 
+  ggplot(aes(x = length_bp, color = as.character(sample_n))) +
+    geom_density(show.legend = FALSE) +
+    facet_wrap(~breed, nrow = 5, strip.position = "right") +
+    theme_bw(base_size = 12) +
+    ggtitle("ROH length distribution by population") +
+    theme(plot.title = element_text(hjust = 0.5))
+```
+
+### ROH length summary
+```{r summarise_roh_length_cohort}
+
+roh_dat %>% 
+  group_by(breed) %>% 
+  summarise(min = min(length_bp),q25 = quantile(length_bp, 0.25), median = median(length_bp), 
+            mean = mean(length_bp), q75 = quantile(length_bp, 0.75), max = max(length_bp),
+            sd = sd(length_bp)) %>% 
+  kable(format.args = list(big.mark = ","), caption = "Length (bp) Summary by Population", digits = 0) 
+
+```
+
+
+### Genome fractions as ROHs
+```{r per_sample_avg_genome_prop_as_roh} 
+
+subset_by_roh_length <- function(fr, to, data_set){
+  
+  roh_dat %>% 
+    filter(length_bp >= as.numeric(fr), length_bp < as.numeric(to)) %>% 
+    group_by(breed,sample) %>% 
+    summarise(per_sample_genome_fraction = sum(length_bp)/genome_length) %>% 
+    ungroup() %>%
+    group_by(breed) %>% 
+    summarise(mean_per_sample_genome_fraction = mean(per_sample_genome_fraction),
+              sd_per_sample_genome_fraction = sd(per_sample_genome_fraction)) %>% 
+    mutate(data_set = data_set)
+}
+
+fractions <- bind_rows(
+  subset_by_roh_length(0, 1e6, "0-1Mb"),
+  subset_by_roh_length(1e6, 2e6, "1-2Mb"),
+  subset_by_roh_length(2e6, 4e6, "2-4Mb"),
+  subset_by_roh_length(4e6, 8e6, "4-8Mb"),
+  subset_by_roh_length(8e6, 16e6, "8-16Mb"),
+  
+    
+  roh_dat %>% 
+    filter(length_bp > 16e6) %>% 
+    group_by(breed,sample) %>% 
+    summarise(per_sample_genome_fraction = sum(length_bp)/genome_length) %>% 
+    ungroup() %>%
+    group_by(breed) %>% 
+    summarise(mean_per_sample_genome_fraction = mean(per_sample_genome_fraction),
+              sd_per_sample_genome_fraction = sd(per_sample_genome_fraction)) %>% 
+    mutate(data_set = ">16Mb")
+  
+  )  %>% 
+  mutate(data_set = factor(data_set, levels = c("0-1Mb", "1-2Mb", "2-4Mb", "4-8Mb", "8-16Mb", ">16Mb"))) %>% 
+  mutate(errors_lower = mean_per_sample_genome_fraction - sd_per_sample_genome_fraction,
+         errors_upper = mean_per_sample_genome_fraction + sd_per_sample_genome_fraction)
+
+
+ggplot(fractions, aes(x = breed, y = mean_per_sample_genome_fraction, fill = data_set)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = errors_lower, ymax = errors_upper), position =  position_dodge2(width = 0.5, padding = 0.5)) +
+  theme_bw(base_size = 12) +
+  xlab(NULL) +
+  ylab("genome fraction") +
+  ggtitle("Mean per-sample genome fractions as ROHs") +
+  scale_fill_brewer(palette="Dark2") +
+  scale_y_continuous(breaks = seq(0,1,0.05), expand = c(0.01,0.01)) +
+  theme(legend.title = element_blank(), plot.title = element_text(hjust = 0.5))
+
+```
+
+### Mean genomic proportion in homozygosity
+
+```{r}
+
+roh_dat %>% 
+  mutate(is_short = length_bp < 1e6) %>% 
+  group_by(is_short, breed, sample) %>% 
+  summarise(per_sample_genome_fraction = sum(length_bp)/genome_length) %>% 
+  ungroup() %>%
+  group_by(is_short, breed) %>% 
+  summarise(mean = mean(per_sample_genome_fraction),
+            sd = sd(per_sample_genome_fraction)) %>% 
+  mutate(roh_length = ifelse(is_short, "<1Mb",">1Mb")) %>% 
+  reshape2::dcast(roh_length ~ breed, value.var = "mean") %>% 
+  janitor::adorn_totals() %>% 
+  knitr::kable(digits = 2)
+  
+```
+
+
+### Most homozygous chromosomes
+
+```{r, fig.height=20}
+
+make_box_plot_roh_chr <- function(pop){
+  
+  roh_dat %>%
+  filter(breed == pop) %>% 
+  group_by(sample, chr) %>%
+  summarise(sum_len = sum(length_bp)) %>% 
+  ggplot(aes(y = reorder(chr, sum_len), x = sum_len)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_point(color = "red", alpha = 0.5) +
+    theme_bw(base_size = 12) +
+    xlab("sum_length") +
+    ylab("Chromosome") +
+    ggtitle(pop)
+  
+}
+
+
+
+
+
+ggarrange(make_box_plot_roh_chr("EWB"), 
+          make_box_plot_roh_chr("LW"), 
+          make_box_plot_roh_chr("LR"), 
+          make_box_plot_roh_chr("PI"), 
+          make_box_plot_roh_chr("DU"), ncol = 1, nrow = 5)
+
+
+
+```
+
