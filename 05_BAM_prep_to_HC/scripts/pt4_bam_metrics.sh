@@ -14,9 +14,9 @@ SAMTOOLS=/home/fb4/palma-vera/FBN_HOME/Tools/samtools_1.9/samtools-1.9_installed
 
 
 echo "Processing BAMs"
-ls -l ../output/FINAL/*${sample_nm}*.bam
+ls -l ../output/*${sample_nm}*.bam
 
-for bam in ../output/FINAL/*${sample_nm}*.bam
+for bam in ../output/*${sample_nm}*.bam
 do
 	echo "# Processing BAM: $bam"
 

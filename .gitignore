@@ -67,3 +67,5 @@ test.sh
 *.roh
 *.tab*
 *.tsv
+*.snpden
+*.SNPids
