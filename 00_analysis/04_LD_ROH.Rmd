@@ -1,5 +1,5 @@
 ---
-title: "LD and ROH"
+title: "Analysis of Linkage Disequilibrium and Runs of Homozygosity"
 output: rmdformats::robobook
 ---
 
@@ -13,13 +13,15 @@ library(stringr)
 library(here)
 library(ggpubr)
 library(knitr)
+library(GenomicRanges)
+library(magrittr)
 
 sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv"))
 
 genome_length <- 2501912388 #Golden Path Length	2,501,912,388 (Sscrofa11.1)
 ```
 
-Analysis of Linkage Disequilibrium and Runs of Homozygosity
+
 
 # Linkage Disequilibrium (LD)
 
@@ -34,13 +36,14 @@ knitr::include_graphics(here("12_LD_ROH/output", "LD_trends_max5Mb.png"))
 ```
 
 # Runs of Homozygosity (ROH)
-
 ```{r ROH_import_regions, include=FALSE}
 
 roh_dat <- vroom(here("12_LD_ROH/output/ROH_regions.table"), col_types = c(`[3]Chromosome`="c")) %>% 
   dplyr::rename(RG = `# RG`, sample = `[2]Sample`, chr = `[3]Chromosome`, start = `[4]Start`, end = `[5]End`, length_bp = `[6]Length (bp)`,
                 n_markers = `[7]Number of markers`, qual_avg_fwd_bwd_phred = `[8]Quality (average fwd-bwd phred score)`) %>% 
   filter(RG != "# RG") %>% 
+  # exclude x-chrom
+  filter(chr != "X") %>% 
   inner_join(
     
     # include an ordered-naming for later when plotting all samples together (i.e. boxplot)
@@ -57,9 +60,8 @@ roh_dat <- vroom(here("12_LD_ROH/output/ROH_regions.table"), col_types = c(`[3]C
     by = c("sample" = "sample_id"))
 
 
-dim(roh_dat) # 465875     11
+dim(roh_dat) # 464108     10
 ```
-
 
 ### ROH length distribution (< 1Mb)
 ```{r hist_check_roh_length_bp_distribution, fig.width=10, fig.height=10} 
@@ -93,7 +95,6 @@ roh_dat %>%
   kable(format.args = list(big.mark = ","), caption = "Length (bp) Summary by Population", digits = 0) 
 
 ```
-
 
 ### Genome fractions as ROHs
 ```{r per_sample_avg_genome_prop_as_roh} 
@@ -149,7 +150,6 @@ ggplot(fractions, aes(x = breed, y = mean_per_sample_genome_fraction, fill = dat
 ```
 
 ### Mean genomic proportion in homozygosity
-
 ```{r}
 
 roh_dat %>% 
@@ -202,3 +202,235 @@ ggarrange(make_box_plot_roh_chr("EWB"),
 
 ```
 
+
+
+### Shared ROHs among dam-lines and among sire-lines
+
+The intersection of sites within rohs was used to determine shared rohs among breed types (sire-breeds, dam-breeds).
+
+There was no sharing of roh-sites among breeds of the same type. However, common roh-snps were found among samples of the same breeds.
+
+On the other hand, there were common roh-snps among LW and EWB; and among DU and EWB.
+
+```{r function_to_find_snps_in_roh_per_sample, eval = FALSE}
+
+# site != SNP
+# Site = a site of variation in the cohort. The sample in the subpop (breed) could have the variant or not.
+
+get_sites_in_roh <- function(sample_id){
+  
+  #sample_id="SAMEA1557387"
+
+  # prepare roh granges
+  roh_gr <- roh_dat %>% 
+    # subset rohs for this sample
+    filter(sample == sample_id) %>% 
+    # prepare cols for granges
+    dplyr::select(chr, start, end) %>% 
+    dplyr::rename(seqnames = chr) %>% 
+    # turn into granges
+    makeGRangesFromDataFrame()
+  
+  # import snps in cohort vcf
+  snps_main_vcf_gr <- here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered.SNPids") %>% 
+    vroom(col_names = FALSE, col_types = c("X1"="c")) %>% 
+    dplyr::select(X1,X3) %>% 
+    # prepare columns for granges
+    mutate(seqnames = X1, start = X3, end = X3) %>% 
+    dplyr::select(seqnames, start, end) %>% 
+    makeGRangesFromDataFrame()
+  
+  # Get sites in ROHs
+  subsetByOverlaps(snps_main_vcf_gr, roh_gr, minoverlap = 1) %>% 
+    # convert to data frame
+    as.data.frame() %>% 
+    dplyr::select(seqnames, start, end) %>% 
+    as_tibble()
+  }
+
+```
+
+```{r get_sites_in_roh_by_sample_and_export, eval = FALSE}
+
+common_roh_sites_LW <- sample_info %>% filter(breed == "Large White") %>% .$sample_id %>% 
+  lapply(function(samp){
+    print(samp)
+    get_sites_in_roh(sample_id = samp) %>% return()
+  }) %>% 
+  purrr::reduce(inner_join, by = c("seqnames","start","end"))
+
+common_roh_sites_LR <- sample_info %>% filter(breed == "Landrace") %>% .$sample_id %>% 
+  lapply(function(samp){
+    print(samp)
+    get_sites_in_roh(sample_id = samp) %>% return()
+  }) %>% 
+  purrr::reduce(inner_join, by = c("seqnames","start","end"))
+
+common_roh_sites_PT <- sample_info %>% filter(breed == "Pietrain") %>% .$sample_id %>% 
+  lapply(function(samp){
+    print(samp)
+    get_sites_in_roh(sample_id = samp) %>% return()
+  }) %>% 
+  purrr::reduce(inner_join, by = c("seqnames","start","end"))
+
+common_roh_sites_DU <- sample_info %>% filter(breed == "Duroc") %>% .$sample_id %>% 
+  lapply(function(samp){
+    print(samp)
+    get_sites_in_roh(sample_id = samp) %>% return()
+  }) %>% 
+  purrr::reduce(inner_join, by = c("seqnames","start","end"))
+
+common_roh_sites_EWB <- sample_info %>% filter(breed == "European Wild Boar") %>% .$sample_id %>% 
+  lapply(function(samp){
+    print(samp)
+    get_sites_in_roh(sample_id = samp) %>% return()
+  }) %>% 
+  purrr::reduce(inner_join, by = c("seqnames","start","end"))
+
+
+write.csv(common_roh_sites_LW, here("00_analysis/data/common_roh_sites_LW.csv"))
+write.csv(common_roh_sites_LR, here("00_analysis/data/common_roh_sites_LR.csv"))
+write.csv(common_roh_sites_PT, here("00_analysis/data/common_roh_sites_PT.csv"))
+write.csv(common_roh_sites_DU, here("00_analysis/data/common_roh_sites_DU.csv"))
+write.csv(common_roh_sites_DU, here("00_analysis/data/common_roh_sites_EWB.csv"))
+
+``` 
+
+```{r keep_only_alt_alleles_of_roh_sites} 
+# keep sites of variation 
+# roh sites could be hom-ref, only keep het or hom-alt sites.
+# sites previously exported by subsetting main vcf by population.
+
+common_roh_snps_LW <- read.csv(here("00_analysis/data/common_roh_sites_LW.csv")) %>%
+  inner_join(
+    vroom(here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_large_white.SNPids"), col_names = FALSE),
+    by = c("seqnames"="X1","start"="X3")
+  )
+  
+common_roh_snps_LR <- read.csv(here("00_analysis/data/common_roh_sites_LR.csv")) %>%
+  inner_join(
+    vroom(here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_landrace.SNPids"), col_names = FALSE),
+    by = c("seqnames"="X1","start"="X3")
+  )
+
+
+common_roh_snps_PT <- read.csv(here("00_analysis/data/common_roh_sites_PT.csv")) %>%
+  inner_join(
+    vroom(here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_pietrain.SNPids"), col_names = FALSE),
+    by = c("seqnames"="X1","start"="X3")
+  )
+
+
+common_roh_snps_DU <- read.csv(here("00_analysis/data/common_roh_sites_PT.csv")) %>%
+  inner_join(
+    vroom(here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_duroc.SNPids"), col_names = FALSE),
+    by = c("seqnames"="X1","start"="X3")
+  )
+
+
+common_roh_snps_EWB <- read.csv(here("00_analysis/data/common_roh_sites_EWB.csv")) %>%
+  inner_join(
+    vroom(here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_euro_wild_boar.SNPids"), col_names = FALSE),
+    by = c("seqnames"="X1","start"="X3")
+  )
+```
+
+```{r tabulate_shared_roh_number_by_breed}  
+list(common_roh_snps_EWB, common_roh_snps_LW, common_roh_snps_LR, common_roh_snps_PT, common_roh_snps_DU) %>% 
+  lapply(nrow) %>% 
+  as.data.frame() %>% 
+  set_colnames(c("EWB","LW","LR","PT","DU")) %>% 
+  kable(caption = "Number of shared ROH-snps among samples of the same breed")
+
+```
+
+```{r tabulate_shared_roh_number_by_breed_by_chr} 
+
+list(common_roh_snps_EWB, common_roh_snps_LW, common_roh_snps_LR, common_roh_snps_PT, common_roh_snps_DU) %>% 
+  set_names(c("EWB","LW","LR","PT","DU")) %>% 
+  bind_rows(.id = "Breed") %>%
+  group_by(Breed, seqnames) %>% 
+  summarise(n = n()) %>% 
+  reshape2::dcast(seqnames ~ Breed, value.var = "n") %>% 
+  kable(caption = "Number of shared ROH-snps by chromosome among samples of the same breed")
+
+
+```
+
+```{r find_roh_snps_shared_with_EWB_and_tabulate}
+
+find_shared_snp_rohs_dom_ewb <- function(nm1,nm2){
+  
+  #nm1="LW"
+  #nm2="large_white"
+
+  # find common sites domestics - ewb
+  inner_join(
+    read.csv(here("00_analysis/data",paste0("common_roh_sites_",nm1,".csv"))),
+    read.csv(here("00_analysis/data/common_roh_sites_EWB.csv")),
+    by = c("seqnames","start","end")
+  ) %>% 
+    dplyr::select(seqnames, start) %>% 
+    inner_join(
+      # snps detected in either domestic or ewb
+      bind_rows(
+        vroom(here("10_FinalVCF/output",paste0("cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_",nm2,".SNPids")), col_names = FALSE),
+        vroom(here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_euro_wild_boar.SNPids"), col_names = FALSE)) %>% 
+        unique() %>% 
+        dplyr::rename(seqnames = X1, start = X3) %>% 
+        dplyr::select(seqnames, start),
+      by = c("seqnames","start")
+    ) %>% 
+    mutate(data_set = paste0(nm1,"_x_","EWB"))
+  }
+
+print("Number of SNPs in roh shared by domestics and EWB")
+find_shared_snp_rohs_dom_ewb("LW","large_white") %>% group_by(data_set, seqnames) %>% summarise(n_snps = n())
+find_shared_snp_rohs_dom_ewb("LR","landrace") %>% group_by(data_set, seqnames) %>% summarise(n_snps = n())
+find_shared_snp_rohs_dom_ewb("PT","pietrain") %>% group_by(data_set, seqnames) %>% summarise(n_snps = n())
+find_shared_snp_rohs_dom_ewb("DU","duroc") %>% group_by(data_set, seqnames) %>% summarise(n_snps = n())
+
+```
+
+
+
+### Genes in ROHs (Pending -- need to define "shared" ... according to same alleles in roh???)
+
+
+
+### Low LD but high ROH in EWB? (some relevenat literature)
+
+There is much faster LD decay in EWB, but they also have more ROHs. The following papers confirm the ROH and LD profiles. But I still need to find a good explanation for this dissonance.
+
+**Bosse M, Megens H-J, Madsen O, Paudel Y, Frantz LAF, Schook LB, et al. (2012) Regions of Homozygosity in the Porcine Genome: Consequence of Demography and the Recombination Landscape. PLoS Genet 8(11): e1003100. https://doi.org/10.1371/journal.pgen.1003100 https://journals.plos.org/plosgenetics/article?id=10.1371/journal.pgen.1003100**
+
+* This paper shows that EWB have more ROHs than Eu-Domestics.
+
+* "European wild boars are least variable, but also European breeds contain large homozygous stretches in their genome."
+
+* "The European wild boar populations, which are geographically the most distal from the putative origin of the species, are thought to have separated from Southeast Asian Sus scrofa in the late Pleistocene between 0.5 and 0.9 Mya [19], [22], [23]. The latest glaciation events in Europe created population bottlenecks and subsequent post glacial demographic expansion from refugia in the Iberian Peninsula and the Balkans [23]. The genetic diversity of Asian wild boars was probably less affected by the latest glaciation event because a larger area of suitable habitat would have remained available, although it may have separated Northeastern and Southeastern wild boars [24]. "
+
+* "The mean number and size of ROHs varied significantly between European and Asian domesticated pigs (p,0.001) as well as between wild boars and breeds within continents (p,0.001, Figure 1C and 1D). On average 23% of the genome was considered to be a region of homozygosity."
+
+* "European wild boars had on average the highest number of ROHs and highest proportion of genomic autozygosity."
+
+* "the European wild populations had the smallest population size based on the ROH analysis"
+
+* "European wild boars, by contrast, showed a more uniform distribution of ROHs relative to chromosomal position (Figure 7), consistent with a long lasting low effective population size. Findings. Findings by Scandura et al. [23] confirmed that genetic diversity in current European wild boars (apart from those on the Italian Peninsula) was mostly affected by glacial bottlenecks. Nothnagel"
+
+* "recent studies have found evidence for more intensive bottlenecks in Europe compared to Asia due to Pleistocene glaciations [21]. Thus, we expect a degradation of the overall genetic diversity in European populations compared to Asian populations. This phenomenon was most apparent in the nucleotide diversity outside ROHs (Figure 5). The demographic decline of most European wild boar populations did not seem to cause a decline in genetic variation within these populations according to [23]. Here we show, however, that patterns ofROH distribution as well as nucleotide diversity outside of ROHs are consistent with a long and ongoing history of small local effective population sizes."
+
+* "... suggested that the genetic variation within domesticated pig breeds is not significantly lower than within the wild boar genome. This is confirmed by our findings in that European wild boars contained more ROHs and lower nucleotide diversity outside ROHs compared to European domesticated pigs."
+
+* " The proportion of ROHs in the genome was much higher in pig than in any other species studied so far, with individuals containing ROHs in over 75% of their genome."
+
+* " A bottleneck in the past with stable or on-going population growth ever since may lead to a more equal distribution of ROHs, as observed in the European wild boars. Breed formation in European pigs has likely resulted from hybridization of different domestic and wild origins, including pigs originating from Asia."
+
+* " In the Large White breed, some genes were found in the homozygous regions that are possibly under positive selection associated with traits of commercial interest, such as fast reproduction."
+
+* " European wild boar, the cumulative shared homozygous regions are much shorter and not always carrying genes, which could indicate that, despite the high degree of homozygosity in individual genomes in wild populations, selective sweeps may not be very common."
+
+
+**Muñoz, M., Bozzi, R., García-Casco, J. et al. Genomic diversity, linkage disequilibrium and selection signatures in European local pig breeds assessed with a high density SNP chip. Sci Rep 9, 13546 (2019). https://doi.org/10.1038/s41598-019-49830-6**
+
+* This paper shows the rapid LD decay in EWB, similar to the one observed in our data.

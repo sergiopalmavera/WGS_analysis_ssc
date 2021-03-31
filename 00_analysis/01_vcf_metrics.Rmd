@@ -11,6 +11,7 @@ library(here)
 library(vroom)
 library(knitr)
 library(ggplot2)
+library(stringr)
 
 sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv"))
 ```
@@ -79,4 +80,67 @@ final_vcf_metrics_detail %>%
     ggtitle(label = "Number of biallelic SNPs per sample (GT filtered VCF)")
 
 ```
+
+# SNP density
+
+```{r import_snp_density_data}
+
+fls <- here("10_FinalVCF/output") %>% list.files(pattern = "snpden", full.names = TRUE)
+
+snpden_dat <- lapply(fls, function(f){
+  
+  # get file name (remove path)
+  ff <- f %>% basename()
+  
+  # prepare vcf type file name
+  if(ff == "cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered.snpden"){
+    vcf_type <- "main"
+  }else{
+    vcf_type <- ff %>% str_remove(".snpden") %>% str_remove("cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_")
+  }
+
+  print(vcf_type)
+  
+  # import data and add vcf-type
+  f %>% vroom(col_names = TRUE) %>% mutate(vcf_type = vcf_type) %>% return()
+  
+  }) %>% 
+  bind_rows() %>% 
+  mutate(vcf_type = factor(vcf_type, levels = c("main","euro_wild_boar","large_white","landrace","pietrain","duroc")))
+
+```
+
+```{r summarize_snpden, include=TRUE}
+snpden_dat %>% 
+  group_by(vcf_type) %>% 
+  summarise(mean_snp_per_kb = mean(SNP_COUNT), median_snp_per_kb = median(SNP_COUNT)) %>% 
+  kable()
+  
+```
+
+```{r distribution_snpden, include=TRUE, fig.height=12}
+
+snpden_dat %>% 
+  ggplot(aes(x = SNP_COUNT)) +
+    geom_histogram(bins = 50) +
+    facet_wrap(~vcf_type, ncol = 1, strip.position = "right") +
+    theme_bw(base_size = 12) +
+    geom_vline(xintercept = 1, color = "red", linetype = "dashed") +
+    scale_x_continuous(breaks = seq(0,40,2)) +
+    ggtitle(label = "N_SNPs/Kb Distribution")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
 

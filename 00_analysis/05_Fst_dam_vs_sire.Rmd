@@ -1,0 +1,209 @@
+---
+title: "Analysis of Genetic Differentiation Dam vs Sire lines"
+output: rmdformats::robobook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(dplyr)
+library(ggplot2)
+library(vroom)
+library(stringr)
+library(here)
+library(ggpubr)
+library(knitr)
+library(GenomicRanges)
+library(magrittr)
+
+sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv"))
+
+```
+
+
+```{r import_data, include=FALSE} 
+
+fst_win_dam_sire <- vroom(here("13_Fst/output/fst_win_dam_vs_sire.windowed.weir.fst"))
+
+fst_win_dam_sire$MEAN_FST %>% range()
+
+fst_win_dam_sire$MEAN_FST %>% summary()
+
+fst_win_dam_sire %>% dim() #89917     6
+
+sum(fst_win_dam_sire$MEAN_FST > 0.5) 
+
+```
+
+```{r prepare_data}
+
+fst_win_dam_sire_prep <- fst_win_dam_sire %>% 
+  # keep windows with at least 10 SNPs
+  filter(N_VARIANTS >= 10) %>% 
+  # calculate z-scores
+  mutate(is_x = CHROM == "X") %>% 
+  group_by(is_x) %>% 
+  mutate(zFst = scale(MEAN_FST)[,1]) %>% 
+  ungroup() %>% 
+  mutate(CHROM = factor(CHROM, levels = c(1:18,"X")))
+
+```
+
+# Summary
+```{r}
+
+fst_win_dam_sire_prep %>% 
+  dplyr::select(CHROM, BIN_START, BIN_END, MEAN_FST, zFst) %>% 
+  reshape2::melt(id.vars = c("CHROM","BIN_START","BIN_END")) %>% 
+  group_by(variable) %>% 
+  summarise(min = min(value), 
+            mean = mean(value), 
+            median = median(value), 
+            q99 = quantile(value, 0.99),
+            q99.7 = quantile(value, 0.997),
+            q99.8 = quantile(value, 0.998),
+            q99.9 = quantile(value, 0.999),
+            max = max(value)) %>% 
+  kable(digits = 2)
+
+```
+
+
+# Windowed Fst distribution
+```{r}
+
+ggarrange(
+  
+  fst_win_dam_sire_prep %>% 
+    dplyr::select(CHROM, BIN_START, BIN_END, MEAN_FST, zFst) %>% 
+    reshape2::melt(id.vars = c("CHROM","BIN_START","BIN_END")) %>%
+    ggplot(aes(x = value)) +
+      geom_histogram(bins = 50) +
+      facet_wrap(~variable, nrow = 2, scales = "free") +
+      theme_bw(base_size = 12) +
+      ylab(NULL) +
+      xlab(NULL),
+  
+  fst_win_dam_sire_prep %>% 
+    dplyr::select(CHROM, BIN_START, BIN_END, MEAN_FST, zFst) %>% 
+    reshape2::melt(id.vars = c("CHROM","BIN_START","BIN_END")) %>% 
+    ggplot(aes(y = variable, x = value)) +
+      geom_violin() +
+      facet_wrap(~variable, nrow = 2, scales = "free") +
+      theme_bw(base_size = 12) +
+      theme(axis.text.y = element_blank()) +
+      ylab(NULL) +
+      xlab(NULL),
+  
+  nrow = 1,
+  ncol = 2
+  
+)
+
+```
+
+
+# Manhattan
+
+```{r make_manhattan_plots, eval = FALSE}
+
+# https://danielroelfs.com/blog/how-i-create-manhattan-plots-using-ggplot/
+
+data_cum <- fst_win_dam_sire_prep %>% 
+  mutate(center = (BIN_START + (BIN_END-BIN_START)/2 )) %>% 
+  group_by(CHROM) %>% 
+  summarise(max_bp = max(center)) %>% 
+  mutate(bp_add = lag(cumsum(max_bp), default = 0)) %>% 
+  dplyr::select(CHROM, bp_add)
+
+fst_win_dam_sire_prep_manhattan <- fst_win_dam_sire_prep %>% 
+  mutate(center = (BIN_START + (BIN_END-BIN_START)/2 )) %>% 
+  inner_join(data_cum, by = "CHROM") %>% 
+  mutate(bp_cum = center + bp_add)
+
+
+axis_set <- fst_win_dam_sire_prep_manhattan %>% 
+  group_by(CHROM) %>% 
+  summarise(center = mean(bp_cum))
+
+
+p_man_fst <- ggplot(fst_win_dam_sire_prep_manhattan, aes(x = bp_cum, y = MEAN_FST, color = CHROM)) +
+  geom_point(alpha = 0.75) +
+  scale_x_continuous(label = axis_set$CHROM, breaks = axis_set$center, expand = c(1/1000,1/1000)) +
+  scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 10)) +
+  scale_color_manual(values = rep(c("black","darkgrey"), nrow(axis_set)) ) +
+  labs(x = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+
+p_man_z_fst <- ggplot(fst_win_dam_sire_prep_manhattan, aes(x = bp_cum, y = zFst, color = CHROM)) +
+  geom_point(alpha = 0.75) +
+  scale_x_continuous(label = axis_set$CHROM, breaks = axis_set$center, expand = c(1/1000,1/1000)) +
+  scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 10)) +
+  scale_color_manual(values = rep(c("black","darkgrey"), nrow(axis_set)) ) +
+  labs(x = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+
+p_man_fst_autosomes <- fst_win_dam_sire_prep_manhattan %>% 
+  filter(CHROM != "X") %>% 
+  ggplot(aes(x = bp_cum, y = MEAN_FST, color = CHROM)) +
+  geom_point(alpha = 0.75) +
+  scale_x_continuous(label = filter(axis_set, CHROM != "X")$CHROM, breaks = filter(axis_set, CHROM != "X")$center, expand = c(1/1000,1/1000)) +
+  scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 10)) +
+  scale_color_manual(values = rep(c("black","darkgrey"), nrow(filter(axis_set, CHROM != "X"))) ) +
+  labs(x = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+p_man_z_fst_autosomes <- fst_win_dam_sire_prep_manhattan %>% 
+  filter(CHROM != "X") %>% 
+  ggplot(aes(x = bp_cum, y = zFst, color = CHROM)) +
+  geom_point(alpha = 0.75) +
+  scale_x_continuous(label = filter(axis_set, CHROM != "X")$CHROM, breaks = filter(axis_set, CHROM != "X")$center, expand = c(1/1000,1/1000)) +
+  scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 10)) +
+  scale_color_manual(values = rep(c("black","darkgrey"), nrow(filter(axis_set, CHROM != "X"))) ) +
+  labs(x = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+
+png(here("00_analysis/figures/manhattan_genomewide_fst_incl_x.png"), res = 300, width = 3000, height = 2000, units = "px"); print(p_man_fst); dev.off()
+png(here("00_analysis/figures/manhattan_genomewide_z_fst_incl_x.png"), res = 300, width = 3000, height = 2000, units = "px"); print(p_man_z_fst); dev.off()
+
+png(here("00_analysis/figures/manhattan_genomewide_fst_excl_x.png"), res = 300, width = 3000, height = 2000, units = "px"); print(p_man_fst_autosomes); dev.off()
+png(here("00_analysis/figures/manhattan_genomewide_z_fst_excl_x.png"), res = 300, width = 3000, height = 2000, units = "px"); print(p_man_z_fst_autosomes); dev.off()
+```
+
+```{r display_manhattan_plots}
+
+knitr::include_graphics(c(here("00_analysis/figures/manhattan_genomewide_fst_excl_x.png"),
+                        here("00_analysis/figures/manhattan_genomewide_z_fst_excl_x.png")))
+
+```
+
+
+
+
