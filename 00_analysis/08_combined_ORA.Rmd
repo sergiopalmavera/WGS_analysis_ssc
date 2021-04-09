@@ -1,0 +1,134 @@
+---
+title: "Combined ORA - Genes in outlier regions detected by Fst and pi-ratio"
+output: rmdformats::robobook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+library(WebGestaltR)
+library(dplyr)
+library(here)
+```
+
+```{r import_gene_lists, eval = FALSE}
+
+genes_outliers_sire_pi_ratio <- read.csv(here("00_analysis/data/genes_outliers_sire_pi_ratio.csv")) %>% as_tibble()
+
+genes_outliers_dam_pi_ratio <- read.csv(here("00_analysis/data/genes_outliers_dam_pi_ratio.csv")) %>% as_tibble()
+
+genes_outliers_fst <- read.csv(here("00_analysis/data/genes_outliers_fst.csv")) %>% as_tibble()
+
+```
+
+```{r function_run_WebGestaltR, eval = FALSE} 
+#---------------------------
+# function_run_WebGestaltR
+#---------------------------
+
+run_WebGestaltR <- function(
+  interestGene, # vector of genes as input
+  projectName, # the suffix to which "Project_" is appended
+  enrichDatabase, # the data base to query  
+  outputDirectory # where to store the results
+  ){
+  res <- WebGestaltR(
+    enrichDatabase = enrichDatabase,
+    enrichMethod = "ORA",
+    organism = "sscrofa",
+    interestGene = interestGene,
+    interestGeneType = "ensembl_gene_id",
+    referenceSet = "genome",
+    sigMethod = "fdr",
+    fdrMethod = "BH",
+    fdrThr = 0.1,
+    topThr = 100,
+    reportNum = 20,
+    isOutput = TRUE,
+    outputDirectory = outputDirectory,
+    hostName = "http://www.webgestalt.org/",
+    projectName = projectName
+  )
+  
+  write.csv(
+    res, 
+    file.path(outputDirectory,paste0("Project_", projectName), paste0(enrichDatabase,"_sig_results.csv"))
+  )
+}
+
+```
+
+
+# Fst + pi_ratio_dam
+
+There were no significant results here
+
+```{r, eval = FALSE}
+
+run_WebGestaltR(
+  interestGene=unique(genes_outliers_fst$gene_id, genes_outliers_dam_pi_ratio$gene_id),
+  projectName="GOBP",
+  enrichDatabase="geneontology_Biological_Process",
+  outputDirectory=here("00_analysis/data/webgestalt_combined_fst_pi_ratio/Fst_plus_pi_ratio_dam")
+)
+
+
+run_WebGestaltR(
+  interestGene=unique(genes_outliers_fst$gene_id, genes_outliers_dam_pi_ratio$gene_id),
+  projectName="KEGG",
+  enrichDatabase="pathway_KEGG",
+  outputDirectory=here("00_analysis/data/webgestalt_combined_fst_pi_ratio/Fst_plus_pi_ratio_dam")
+)
+
+
+```
+
+# Fst + pi_ratio_sire
+
+There were no significant results here
+
+```{r, eval = FALSE}
+
+run_WebGestaltR(
+  interestGene=unique(genes_outliers_fst$gene_id, genes_outliers_sire_pi_ratio$gene_id),
+  projectName="GOBP",
+  enrichDatabase="geneontology_Biological_Process",
+  outputDirectory=here("00_analysis/data/webgestalt_combined_fst_pi_ratio/Fst_plus_pi_ratio_sire")
+)
+
+
+run_WebGestaltR(
+  interestGene=unique(genes_outliers_fst$gene_id, genes_outliers_sire_pi_ratio$gene_id),
+  projectName="KEGG",
+  enrichDatabase="pathway_KEGG",
+  outputDirectory=here("00_analysis/data/webgestalt_combined_fst_pi_ratio/Fst_plus_pi_ratio_sire")
+)
+
+
+```
+
+# All genes together
+
+There were no significant results here
+
+```{r, eval = FALSE}
+
+gns <- c(genes_outliers_fst$gene_id, genes_outliers_dam_pi_ratio$gene_id, genes_outliers_sire_pi_ratio$gene_id) %>% unique()
+
+run_WebGestaltR(
+  interestGene=gns,
+  projectName="GOBP",
+  enrichDatabase="geneontology_Biological_Process",
+  outputDirectory=here("00_analysis/data/webgestalt_combined_fst_pi_ratio/Fst_plus_pi_ratio_all")
+)
+
+
+run_WebGestaltR(
+  interestGene=gns,
+  projectName="KEGG",
+  enrichDatabase="pathway_KEGG",
+  outputDirectory=here("00_analysis/data/webgestalt_combined_fst_pi_ratio/Fst_plus_pi_ratio_all")
+)
+
+
+```
+

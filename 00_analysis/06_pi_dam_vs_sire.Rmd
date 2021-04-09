@@ -1,0 +1,446 @@
+---
+title: 'Analysis of genetic diversity dam vs sire lines'
+output: rmdformats::robobook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(here)
+library(dplyr)
+library(vroom)
+library(stringr)
+library(magrittr)
+library(ggplot2)
+library(GenomicRanges)
+library(WebGestaltR)
+```
+
+```{r windows_to_work_with, include=FALSE}
+
+# to make sure that each bread is correctly represented, keep windows with at least 10 SNPs for each breed
+# Then use those windows to subset combined-lines populations
+
+idx <- here("15_pi/output") %>% list.files(full.names = TRUE) %>% str_detect("dam|sire|euro_wild_boar_all", negate = TRUE)
+
+fls <- here("15_pi/output") %>% list.files(full.names = TRUE) %>% .[idx]
+
+fls
+
+pi_win <- lapply(fls, function(fl){
+  
+  fl %>% 
+    # read in data
+    vroom() %>% 
+    # remove windows with too few snps
+    filter(N_VARIANTS >= 10) %>% 
+    dplyr::select(-PI, -N_VARIANTS) %>% 
+    set_names(c("seqnames", "start", "end")) 
+
+  }) %>% 
+  purrr::reduce(inner_join, by = c("seqnames", "start", "end")) # 68,491 x 7
+
+```
+
+```{r import_data_compute_pi_ratio, include=FALSE}
+
+idx <- here("15_pi/output") %>% list.files(full.names = TRUE) %>% str_detect("dam|sire")
+
+fls <- here("15_pi/output") %>% list.files(full.names = TRUE) %>% .[idx]
+
+fls
+
+pi_dat <- lapply(fls, function(fl){
+  
+  pop <- fl %>% basename() %>% str_remove("cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_") %>% str_remove("_all_sites.windowed.pi")
+  
+  d <- fl %>% 
+    # read in data
+    vroom() %>% 
+    # set names
+    set_names(c("seqnames", "start", "end", "n_snps", paste0("pi_", pop))) %>% 
+    # remove n snps col
+    dplyr::select(-n_snps)
+  
+  return(d)
+  
+  }) %>% 
+  purrr::reduce(inner_join, by = c("seqnames", "start", "end")) %>% # 89,288 x 5
+  # subet by windows with enough snps in each breed
+  semi_join(pi_win, by = c("seqnames", "start", "end")) %>% #68,491 x 5
+  # compute pi_ratio
+  mutate(pi_ratio = pi_dam_lines/pi_sire_lines, 
+         # log to make it simetrical around zero
+         log10_pi_ratio = log10(pi_ratio),
+         # standarized log10 scores
+         z_log10_pi_ratio = scale(log10_pi_ratio)[,1]) %>% 
+  # remove sex chromosomes
+  filter(seqnames %in% 1:18) %>% 
+  mutate(seqnames = factor(seqnames, levels = 1:18))
+
+```
+
+```{r gene_set} 
+
+ssc_gene_set <- readRDS(here("ref_ensemble95/gene_set/ssc_gene_set.rds"))
+
+```
+
+```{r qtl_set, include=FALSE}
+
+qtl_set <- readRDS(here("pigQTL/qtl_set.rds"))
+
+qtl_set %>% 
+  as.data.frame() %>% 
+  group_by(qtl_class) %>% 
+  summarise(n())
+
+```
+
+
+# Intro
+
+Nucleotide diversity was calculated in windows (size = 50K, step = 25K) with at least 10 SNPs per breed.
+
+In order to make sure each breed was correctely represented within sire and dam lines combined populations, pi was pre-computed for each breed and windows where pi was computed were kept as long as at least 10 SNPs were used in the calculation.
+
+Pi ratio was computed by deviding pi-dam over pi-sire. Ratios were transformed to log10 to make the distribution simetric and then standarized to z-scores to express data as deviations from the genetic mean.
+
+Regions of interest were defined as those in the 0.1% most extreme parts of the distribution (bottom < 0.05% and upper > 99.95%). This threshold was used after visual inspection of the Manhattan plot and in accordance with one other reports (i.e. "Whole-genome resequencing reveals loci under selection during chicken domestication" Rubin 2010). In this case the z-scores are ~abs(5) 
+
+# Pi ratio (dam/sire) distribuion
+
+Log10 was applied to pi-ratio to have a simetric distribution around 0 (zero indicates a pi-ratio of 1)
+
+```{r log10_pi_ratio_distribution} 
+
+pi_dat %>% 
+  ggplot(aes(x = z_log10_pi_ratio)) +
+    geom_histogram() +
+    theme_bw(base_size = 12)
+
+```
+
+# Genomic distribution 
+```{r make_manhattan_plots, eval = FALSE}
+
+# https://danielroelfs.com/blog/how-i-create-manhattan-plots-using-ggplot/
+
+data_cum <- pi_dat %>% 
+  mutate(center = (start + (end-start)/2 )) %>% 
+  group_by(seqnames) %>% 
+  summarise(max_bp = max(center)) %>% 
+  mutate(bp_add = lag(cumsum(max_bp), default = 0)) %>% 
+  dplyr::select(seqnames, bp_add)
+
+dat_prep_manhattan <- pi_dat %>% 
+  mutate(center = (start + (end-start)/2 )) %>% 
+  inner_join(data_cum, by = "seqnames") %>% 
+  mutate(bp_cum = center + bp_add)
+
+
+axis_set <- dat_prep_manhattan %>% 
+  group_by(seqnames) %>% 
+  summarise(center = mean(bp_cum))
+
+hline <- pi_dat$z_log10_pi_ratio %>% quantile(c(.0005, 0.005, 0.995, .9995)) # corresponding to 0.1% most extreme: (0.0005 + (1-0.9995))*100
+                                                                             # corresponding to 1% most extreme: (0.005 + (1-0.995))*100
+
+p_man_z_log10_pi_ratio <- ggplot(dat_prep_manhattan, aes(x = bp_cum, y = z_log10_pi_ratio, color = seqnames)) +
+  geom_point(alpha = 0.75) +
+  scale_x_continuous(label = axis_set$seqnames, breaks = axis_set$center, expand = c(1/1000,1/1000)) +
+  scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 20)) +
+  scale_color_manual(values = rep(c("black","darkgrey"), nrow(axis_set)) ) +
+  geom_hline(yintercept = hline, linetype = "dashed", color = "red", size = 1, alpha = 0.7) +
+  labs(x = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    axis.text.x = element_text(face = "bold", size = 12, vjust = 3)
+  )
+
+png(here("00_analysis/figures/manhattan_genomewide_z_log10_pi_ratio_excl_x.png"), res = 300, width = 4000, height = 2000, units = "px"); print(p_man_z_log10_pi_ratio); dev.off()
+
+```
+
+```{r display_manhattan_plots} 
+
+knitr::include_graphics(here("00_analysis/figures/manhattan_genomewide_z_log10_pi_ratio_excl_x.png"))
+
+```
+
+# Genes in outlier regions
+
+Genes in/near regions of extreme Fst (outliers) were identified.
+
+Outliers are defined as regions in the top 0.1% of the genomic distribution, plus all adjacent regions in the top 1%. 
+
+Regions in the top1% not nearby top0.1% regions are not considered outliers.
+
+```{r define_pctiles, include=FALSE}
+
+q_lev1 <- 0.1/100 #0.1% most extreme windows
+q_lev2 <- 1/100 #1% most extreme windows
+
+q_lev1_upper_half <- 1-(q_lev1/2)
+q_lev2_upper_half <- 1-(q_lev2/2)
+  
+q_lev1_bottom_half <- q_lev1/2
+q_lev2_bottom_half <- q_lev2/2
+
+```
+
+```{r extract_upper_outliers}
+
+lev1_upper_regions <-  pi_dat %>%  
+  filter(z_log10_pi_ratio > quantile(z_log10_pi_ratio, q_lev1_upper_half) )  %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = TRUE) %>% 
+  # merge adjacent outliers
+  reduce(min.gapwidth = 1)
+
+lev2_upper_regions <-  pi_dat %>%  
+  filter(z_log10_pi_ratio > quantile(z_log10_pi_ratio, q_lev2_upper_half ) ) %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = TRUE) %>% 
+  # merge adjacent outliers
+  reduce(min.gapwidth = 1)
+
+
+
+# keep top lev2 windows adjacent to lev1
+lev2_near_lev1_upper_regions <- subsetByOverlaps(lev2_upper_regions, lev1_upper_regions, maxgap = 0)
+
+outliers_sire <- c(lev1_upper_regions, lev2_near_lev1_upper_regions) # sire: very high/upper positive values (pi_ratio= dam/sire)
+
+```
+
+```{r extract_bottom_outliers}
+
+lev1_bottom_regions <-  pi_dat %>%  
+  filter(z_log10_pi_ratio < quantile(z_log10_pi_ratio, q_lev1_bottom_half) )  %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = TRUE) %>% 
+  # merge adjacent outliers
+  reduce(min.gapwidth = 1)
+
+lev2_bottom_regions <-  pi_dat %>%  
+  filter(z_log10_pi_ratio < quantile(z_log10_pi_ratio, q_lev2_bottom_half ) ) %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = TRUE) %>% 
+  # merge adjacent outliers
+  reduce(min.gapwidth = 1)
+
+
+
+# keep top lev2 windows adjacent to lev1
+lev2_near_lev1_bottom_regions <- subsetByOverlaps(lev2_bottom_regions, lev1_bottom_regions, maxgap = 0)
+
+outliers_dam <- c(lev1_bottom_regions, lev2_near_lev1_bottom_regions) # dam: very low/bottom positive values (pi_ratio= dam/sire)
+
+```
+
+
+```{r find_genes, include=FALSE} 
+
+genes_outliers_sire <- subsetByOverlaps(ssc_gene_set, outliers_sire, maxgap = 50000)
+
+genes_outliers_dam <- subsetByOverlaps(ssc_gene_set, outliers_dam, maxgap = 50000)
+```
+
+```{r export_gene_lists, eval = FALSE}
+
+genes_outliers_sire %>% as_tibble() %>% write.csv(here("00_analysis/data/genes_outliers_sire_pi_ratio.csv"))
+
+genes_outliers_dam %>% as_tibble() %>% write.csv(here("00_analysis/data/genes_outliers_dam_pi_ratio.csv"))
+```
+
+
+
+There are `r genes_outliers_sire %>% length()` genes in upper (lower diversity in sire group) outlier regions (maxgap 50Kb).
+
+There are `r genes_outliers_dam %>% length()` genes in bottom (lower diversity in sire group) outlier regions (maxgap 50Kb).
+
+Recall that pi-ratio is dam/sire. Values above 1 indicate lower diversity in sire and values below 1, lower diverstiy in dam
+
+### Genes in outlier regions of lower diversity for dam group
+
+```{r display_gene_tab_dam}
+
+genes_outliers_dam %>% 
+  as_tibble() %>% 
+  DT::datatable(rownames = FALSE, options = list(pageLength = 20))
+
+```
+
+### Genes in outlier regions of lower diversity for sire group
+
+```{r display_gene_tab_sire}
+
+genes_outliers_sire %>% 
+  as_tibble() %>% 
+  DT::datatable(rownames = FALSE, options = list(pageLength = 20))
+
+```
+
+### Enrichment Analysis
+
+Enrichment analyis was done using all `r c(genes_outliers_dam, genes_outliers_sire) %>% length()` genes and then by spliting genes by dam (bottom outliers) or sire genes (upper outliers).
+
+There were not many significant results (FDR < 0.1). "Nitrogen metabolism" was significantly enriched for combined lists (KEGG) and later on for the *"dam gene list"*, indicating that genes with lower diversity in the dam group were the ones producing the enrichment. Another term that came up as significant was *"T cell receptor signaling pathway"* and *"Cell adhesion molecules (CAMs)"* for the list of genes in regions with lower diversity in sires than in dams.
+
+```{r function_run_WebGestaltR, eval = FALSE} 
+#---------------------------
+# function_run_WebGestaltR
+#---------------------------
+
+run_WebGestaltR <- function(
+  interestGene, # vector of genes as input
+  projectName, # the suffix to which "Project_" is appended
+  enrichDatabase, # the data base to query  
+  outputDirectory # where to store the results
+  ){
+  res <- WebGestaltR(
+    enrichDatabase = enrichDatabase,
+    enrichMethod = "ORA",
+    organism = "sscrofa",
+    interestGene = interestGene,
+    interestGeneType = "ensembl_gene_id",
+    referenceSet = "genome",
+    sigMethod = "fdr",
+    fdrMethod = "BH",
+    fdrThr = 0.1,
+    topThr = 100,
+    reportNum = 20,
+    isOutput = TRUE,
+    outputDirectory = outputDirectory,
+    hostName = "http://www.webgestalt.org/",
+    projectName = projectName
+  )
+  
+  write.csv(
+    res, 
+    file.path(outputDirectory,paste0("Project_", projectName), paste0(enrichDatabase,"_sig_results.csv"))
+  )
+}
+
+```
+
+```{r run_WebGestaltR_all_genes, eval = FALSE}
+run_WebGestaltR(
+  interestGene=c(genes_outliers_dam$gene_id, genes_outliers_sire$gene_id) ,
+  projectName="WebGestaltR_pi_ratio",
+  enrichDatabase="geneontology_Biological_Process",
+  outputDirectory=here("00_analysis/data/webgestalt_pi_ratio/GOBP_all_genes")
+)
+
+
+run_WebGestaltR(
+  interestGene=c(genes_outliers_dam$gene_id, genes_outliers_sire$gene_id) ,
+  projectName="WebGestaltR_pi_ratio",
+  enrichDatabase="pathway_KEGG",
+  outputDirectory=here("00_analysis/data/webgestalt_pi_ratio/KEGG_all_genes")
+) # sig
+
+```
+
+```{r run_WebGestaltR_dam_genes, eval = FALSE}
+gns <- genes_outliers_dam$gene_id
+
+run_WebGestaltR(
+  interestGene=gns,
+  projectName="WebGestaltR_pi_ratio",
+  enrichDatabase="geneontology_Biological_Process",
+  outputDirectory=here("00_analysis/data/webgestalt_pi_ratio/GOBP_dam_genes")
+)
+
+
+run_WebGestaltR(
+  interestGene=gns,
+  projectName="WebGestaltR_pi_ratio",
+  enrichDatabase="pathway_KEGG",
+  outputDirectory=here("00_analysis/data/webgestalt_pi_ratio/KEGG_dam_genes")
+) #sig
+
+```
+
+```{r run_WebGestaltR_sire_genes, eval = FALSE}
+gns <- genes_outliers_sire$gene_id
+
+run_WebGestaltR(
+  interestGene=gns,
+  projectName="WebGestaltR_pi_ratio",
+  enrichDatabase="geneontology_Biological_Process",
+  outputDirectory=here("00_analysis/data/webgestalt_pi_ratio/GOBP_sire_genes")
+)
+
+
+run_WebGestaltR(
+  interestGene=gns,
+  projectName="WebGestaltR_pi_ratio",
+  enrichDatabase="pathway_KEGG",
+  outputDirectory=here("00_analysis/data/webgestalt_pi_ratio/KEGG_sire_genes")
+) # sig
+
+```
+
+# QTLs in outlier regions
+
+Outlier were overlapped with QTLs.
+
+QTLs were downloaded as a gff file from https://www.animalgenome.org/cgi-bin/QTLdb/SS/index ("All data by bp (on SS11.1 in gff format )") on April 1st.
+
+QTLs overlapping extreme regions of differentiation included reproduction, production, meant-carcass, health and exterior QTLs. These are almost all the categories in the qtl data base, so the analysis is not very specific.
+
+```{r overlap_qtls}
+qtl_res_dam <- subsetByOverlaps(qtl_set, outliers_dam, maxgap = 0)
+qtl_res_sire <- subsetByOverlaps(qtl_set, outliers_sire, maxgap = 0)
+```
+
+### Number of QTLs overlapping outlier regions (dam)
+```{r summary_qtl_class_dam} 
+qtl_res_dam %>% 
+  as.data.frame() %>% 
+  group_by(qtl_class, seqnames) %>% 
+  mutate(seqnames = paste0("chr",seqnames),
+         seqnames = factor(seqnames, levels = c(paste0("chr", 1:18)))) %>% 
+  summarise(n_qtls = n()) %>% 
+  reshape2::dcast(qtl_class ~ seqnames, value.var = "n_qtls") %>% 
+  knitr::kable()
+```
+
+### Number of QTLs overlapping outlier regions (sire)
+```{r summary_qtl_class_sire} 
+qtl_res_sire %>% 
+  as.data.frame() %>% 
+  group_by(qtl_class, seqnames) %>% 
+  mutate(seqnames = paste0("chr",seqnames),
+         seqnames = factor(seqnames, levels = c(paste0("chr", 1:18)))) %>% 
+  summarise(n_qtls = n()) %>% 
+  reshape2::dcast(qtl_class ~ seqnames, value.var = "n_qtls") %>% 
+  knitr::kable()
+```
+
+
+### Number of QTLs overlapping outliers and QTL names (dam)
+```{r summary_qtl_class_and_name_dam} 
+
+qtl_res_dam %>% 
+  as.data.frame() %>% 
+  dplyr::group_by(qtl_class, seqnames) %>% 
+  mutate(seqnames = paste0("chr",seqnames)) %>% 
+  summarise(n_qtls = n(), qtl_names = paste(unique(qtl_name), collapse = " / ")) %>% 
+  DT::datatable(rownames = FALSE)
+
+```
+
+### Number of QTLs overlapping outliers and QTL names (sire)
+```{r summary_qtl_class_and_name_sire} 
+
+qtl_res_sire %>% 
+  as.data.frame() %>% 
+  dplyr::group_by(qtl_class, seqnames) %>% 
+  mutate(seqnames = paste0("chr",seqnames)) %>% 
+  summarise(n_qtls = n(), qtl_names = paste(unique(qtl_name), collapse = " / ")) %>% 
+  DT::datatable(rownames = FALSE)
+
+```

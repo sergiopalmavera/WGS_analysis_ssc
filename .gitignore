@@ -69,3 +69,6 @@ test.sh
 *.tsv
 *.snpden
 *.SNPids
+*.frq2
+*.pi
+*.gff

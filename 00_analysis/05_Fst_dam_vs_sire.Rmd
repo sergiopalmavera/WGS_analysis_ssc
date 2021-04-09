@@ -15,11 +15,27 @@ library(ggpubr)
 library(knitr)
 library(GenomicRanges)
 library(magrittr)
+library(tidyr)
+#library(gggenes)
+library(Gviz)
+```
 
-sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv"))
+```{r gene_set} 
+
+ssc_gene_set <- readRDS(here("ref_ensemble95/gene_set/ssc_gene_set.rds"))
 
 ```
 
+```{r qtl_set, include=FALSE}
+
+qtl_set <- readRDS(here("pigQTL/qtl_set.rds"))
+
+qtl_set %>% 
+  as.data.frame() %>% 
+  group_by(qtl_class) %>% 
+  summarise(n())
+
+```
 
 ```{r import_data, include=FALSE} 
 
@@ -35,7 +51,7 @@ sum(fst_win_dam_sire$MEAN_FST > 0.5)
 
 ```
 
-```{r prepare_data}
+```{r prepare_data} 
 
 fst_win_dam_sire_prep <- fst_win_dam_sire %>% 
   # keep windows with at least 10 SNPs
@@ -50,7 +66,7 @@ fst_win_dam_sire_prep <- fst_win_dam_sire %>%
 ```
 
 # Summary
-```{r}
+```{r} 
 
 fst_win_dam_sire_prep %>% 
   dplyr::select(CHROM, BIN_START, BIN_END, MEAN_FST, zFst) %>% 
@@ -70,7 +86,7 @@ fst_win_dam_sire_prep %>%
 
 
 # Windowed Fst distribution
-```{r}
+```{r}  
 
 ggarrange(
   
@@ -105,7 +121,7 @@ ggarrange(
 
 # Manhattan
 
-```{r make_manhattan_plots, eval = FALSE}
+```{r make_manhattan_plots, eval = FALSE} 
 
 # https://danielroelfs.com/blog/how-i-create-manhattan-plots-using-ggplot/
 
@@ -204,6 +220,319 @@ knitr::include_graphics(c(here("00_analysis/figures/manhattan_genomewide_fst_exc
 
 ```
 
+# Genes in regions of extreme Fst (zFst > 8) 
+
+After visual inspection, a zFst of 8 (Fst > 0.6 ) was chosen as threshold, resulting in a 5 of genes that were further investigated.
+
+There were no genes nearby extreme-Fst regions of chr1, genes were only found in outliers located in chr8 (maxgap = 50Kb). 
+
+Each gene was investigated to see if it has a relationship with sire and dam phenotypes.
+
+```{r}
+
+xtrm_fst_win <- fst_win_dam_sire_prep %>% 
+  filter(zFst > 8) %>% 
+  dplyr::rename(seqnames = CHROM, start = BIN_START, end = BIN_END) %>% 
+  makeGRangesFromDataFrame()
+
+gene_res <- subsetByOverlaps(ssc_gene_set, xtrm_fst_win, maxgap = 50000) 
+  
+gene_res %>%   
+  as.data.frame() %>% 
+  dplyr::select(-strand, -width) %>% 
+  kable()
+
+```
 
 
+### ATP10D (ENSSSCG00000008812)
+
+* ATPase phospholipid transporting 10D
+
+* https://pubmed.ncbi.nlm.nih.gov/28542499/
+  - "In summary we found that ATP10D reduces high-fat diet induced obesity and improves insulin sensitivity. ATP10D transgenic mice showed altered hepatic expression of lipid-metabolism associated genes, including Scd1, along with changes in hepatic and plasma lipid species and plasma lipoprotein pattern." 
+
+* https://pubmed.ncbi.nlm.nih.gov/19254779/
+  - "deficiency of Atp10a and Atp10d leads to insulin resistance and obesity in mice." 
+
+* Lipid metabolism has been affected by selective breeding in pigs:  
+  - https://pubmed.ncbi.nlm.nih.gov/32138208/
+    + "Modern pig breeds, which have been genetically improved to achieve fast growth and a lean meat deposition, differ from local pig breeds with respect to fat deposition, fat specific metabolic characteristics and various other properties. " 
+  - https://www.nature.com/articles/s41598-020-67015-4
+    + "pig breeding companies have produced commercial pigs that grow faster and have superior carcasses. However, these carcasses have become leaner having less IMF" 
+
+* Studies in pig reporting ATP10D:
+  - https://www.sciencedirect.com/science/article/pii/S2589004219302500
+    + "SVs identified influence genes involved in metabolic disorders. Three genes, AHNAK, ADGRF5/GPR116, and ATP10D, reported to regulate obesity (Ramdas et al., 2015), were affected by both deletion and duplication events within exonic regions" ... "ATP10D is involved in endoplasmic reticulum-to-Golgi ceramide processing and regulation of obesity (Kengia et al., 2013). " 
+  
+  - https://academic.oup.com/jas/article/94/6/2317/4702119
+    + "Previously reported QTL ... ATP10D ... BWT, ADG, and lipid accretion rate .. Input traits in parity 2, such as FML and total EIP, were found to be associated with a 1-Mb region at 40 Mb on chromosome 8. The suggested candidate gene in this region, adenosinetriphosphatase, class V, type 10D (ATP10D), is implicated in phospholipid translocation (Tanaka et al., 2011). The QTL reported for this region in PigQTLdb were associated with traits such as growth, BW at end of performance test period, and lipid accretion rate (Duthie et al., 2008; Ai et al., 2012)."
+  
+
+### CORIN (ENSSSCG00000008813)
+
+* https://www.ensembl.org/Sus_scrofa/Gene/Ontologies/biological_process?db=core;g=ENSSSCG00000008813;r=8:37530815-37809761
+  - corin, serine peptidase
+  - GO:0007565	female pregnancy
+
+* https://pubmed.ncbi.nlm.nih.gov/22437503/
+  - "Corin (also known as atrial natriuretic peptide-converting enzyme) is a cardiac protease that activates atrial natriuretic peptide (ANP), a cardiac hormone that is important in regulating blood pressure. Unexpectedly, corin expression was detected in the pregnant uterus. Here we identify a new function of corin and ANP in promoting trophoblast invasion and spiral artery remodelling. "
+  - "These results indicate that corin and ANP are essential for physiological changes at the maternal-fetal interface, suggesting that defects in corin and ANP function may contribute to pre-eclampsia."
+  
+* More studies reporting the role of Corin in pregnancy and pre-eclampsia:
+   - https://pubmed.ncbi.nlm.nih.gov/32084366/
+   - https://pubmed.ncbi.nlm.nih.gov/30580684/
+   - https://pubmed.ncbi.nlm.nih.gov/32442927/
+   - https://pubmed.ncbi.nlm.nih.gov/33264706/
+   - https://pubmed.ncbi.nlm.nih.gov/30890412/
+   - https://pubmed.ncbi.nlm.nih.gov/30595185/
+
+* Studies in pig (pubmed: corin + pig)
+  - https://link.springer.com/article/10.1007/s13258-017-0529-4
+    + This paper uses some overlapping data with my data set (PRJNA260763)
+    + "Several genes (e.g., PLSCR4, AGTR1 and CORIN) were related to reproduction traits such as fertility, ovulation rate, and uterine function. "
+    + "CORIN plays a role in female pregnancy by promoting trophoblast invasion and spiral artery remodeling in the uterus (Cui et al. 2012; Soares et al. 2014). It is expressed in the pregnant mouse and human uterus to which its impaired expression is associated with preeclampsia, a major risk factor for placental abruption (Cui et al. 2012; Nagashima et al. 2013). We scanned the gene region for non-synonymous mutations and identified 16 missense variants in this gene region (Table 3)."
+
+### TNIP3 (ENSSSCG00000009100)
+
+* TNFAIP3 interacting protein 3
+
+* https://www.ensembl.org/Sus_scrofa/Gene/Summary?db=core;g=ENSSSCG00000009100;r=8:102892317-102993338
+  - GO terms (BP) related to response to pathgenes.
+  
+* The literature is very similar to what is indicated by the GO terms.
+
+* Pig specific literature:
+
+  - https://academic.oup.com/biolreprod/article/100/1/71/5068674 (weak evidence!)
+    + "Thus, lactocrine deficiency on the first day of postnatal life can alter uterine developmental trajectory with lasting effects on endometrial responses to pregnancy as reflected at the level of the transcriptome on PxD 13."
+    + "The top 10 most highly differentially expressed endometrial mRNAs in high as compared to low iCrit gilts on PxD 13 included NPY, ACOD1, CTRL, TGM3, TNIP3, FAM151A, CRISP3, NLRC4, FGA, and ACSBG1 (Supplemental Table S3)."
+
+
+### ENSSSCG00000035060
+
+* This is a novel gene without associated reports of functions.
+
+### NDNF (ENSSSCG00000029260)
+
+* https://www.ensembl.org/Sus_scrofa/Gene/Summary?db=core;g=ENSSSCG00000029260;r=8:102996281-103088268
+    - neuron derived neurotrophic factor 
+    - GO terms (BP)
+      + angiogenesis, neuron migration, response to ischemia, nitric oxide mediated signal transduction, positive regulation of cell-substrate adhesion, positive regulation of neuron projection development, peptide cross-linking via chondroitin 4-sulfate glycosaminoglycan, **gonadotrophin-releasing hormone neuronal migration to the hypothalamus**, 	extracellular matrix organization, 	negative regulation of neuron apoptotic process, 	cellular response to fibroblast growth factor stimulus, 	vascular wound healing, cellular response to hypoxia, 	negative regulation of endothelial cell apoptotic process
+      
+* https://pubmed.ncbi.nlm.nih.gov/31883645/
+  - "Neuron-Derived Neurotrophic Factor Is Mutated in Congenital Hypogonadotropic Hypogonadism"
+    
+    
+
+
+# QTLs in regions of extreme differentiation
+
+Regions of extreme differentiation were overlapped with QTLs, likewise the genes found in those regions were also overlapped with QTLs
+
+QTLs were downloaded as a gff file from https://www.animalgenome.org/cgi-bin/QTLdb/SS/index ("All data by bp (on SS11.1 in gff format )") on April 1st.
+
+QTLs overlapping extreme regions of differentiation included reproduction, production, meant-carcass, health and exterior QTLs. These are almost all the categories in the qtl data base, so the analysis is not very specific.
+
+
+```{r overlap_qtls}
+qtl_res <- subsetByOverlaps(qtl_set, xtrm_fst_win, maxgap = 0)
+
+```
+
+```{r overlap_genes_with_qtls}
+
+ov <- findOverlaps(query = gene_res, subject = qtl_set, minoverlap = 1)
+
+
+gene_res_qtl <- bind_cols(
+  gene_res[queryHits(ov)] %>% as_tibble() %>% dplyr::select(gene_name),
+  qtl_set[subjectHits(ov)] %>% as_tibble() %>% dplyr::select(qtl_class, qtl_name)
+  )
+
+```
+
+
+### Number of QTLs overlapping extreme Fst regions
+```{r summary_qtl_class} 
+qtl_res %>% 
+  as.data.frame() %>% 
+  dplyr::group_by(seqnames, qtl_class) %>% 
+  mutate(seqnames = paste0("chr",seqnames)) %>% 
+  summarise(n_qtls = n()) %>% 
+  reshape2::dcast(qtl_class ~ seqnames, value.var = "n_qtls") %>% 
+  kable()
+```
+
+### Number of QTLs overlapping extreme Fst regions and QTL names    
+```{r summary_qtl_class_and_name} 
+
+qtl_res %>% 
+  as.data.frame() %>% 
+  dplyr::group_by(seqnames, qtl_class) %>% 
+  mutate(seqnames = paste0("chr",seqnames)) %>% 
+  summarise(n_qtls = n(), qtl_names = paste(unique(qtl_name), collapse = " / ")) %>% 
+  DT::datatable(rownames = FALSE)
+
+```
+
+
+### Number of QTLs overlapping genes in extreme Fst regions
+```{r summary_qtl_class_gene_overlap}
+gene_res_qtl %>% 
+  as.data.frame() %>% 
+  dplyr::group_by(gene_name, qtl_class) %>% 
+  summarise(n_qtls = n()) %>% 
+  reshape2::dcast(qtl_class ~ gene_name, value.var = "n_qtls") %>% 
+  kable()
+```
+
+### Number of QTLs overlapping genes in extreme Fst regions and QTL names    
+```{r summary_qtl_class_and_name_gene_overlap}
+gene_res_qtl %>% 
+  group_by(gene_name, qtl_class) %>% 
+  summarise(n_qtls = n(), qtl_names = paste(unique(qtl_name), collapse = " / ")) %>% 
+  DT::datatable(rownames = FALSE)
+```
+
+
+
+# Zooming in outlier Regions  
+
+```{r prepare_allele_frequencies} 
+
+prep_af_dat <- function(pop){
+  
+  fl <- paste0("cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_", pop ,"_all_sites.frq2")
+  
+  d <- here("14_allele_frequencies/output/",fl) %>% 
+    vroom() %>% 
+    # keep chromosomes for the regions of interest
+    # this allows to reduce the amount of data to process
+    filter(CHROM %in% as.character(unique(seqnames(xtrm_fst_win)))) %>% 
+    mutate(tmp = POS) %>% 
+    dplyr::rename(seqnames = CHROM, start = POS, end = tmp) %>% 
+    dplyr::select(seqnames, start, end, ALT_frq)
+    
+  names(d)[names(d) == "ALT_frq"] <- pop
+  
+  return(d)
+  
+}
+
+alt_frq_per_pop_ss <- inner_join(prep_af_dat("duroc"), prep_af_dat("pietrain"), by = c("seqnames","start","end")) %>% 
+  inner_join(prep_af_dat("landrace"), by = c("seqnames","start","end")) %>% 
+  inner_join(prep_af_dat("large_white"), by = c("seqnames","start","end")) %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = TRUE)
+
+
+```
+
+```{r merge_adjacent_outliers}
+xtrm_fst_win_red <- reduce(xtrm_fst_win, min.gapwidth = 1)
+```
+
+
+```{r function_vis_genomic_region_1}
+
+vis_genomic_region_1 <- function(rect_region, maxgap){
+  
+  # Set the chromosome name
+  chr <- seqnames(rect_region) %>% as.character()
+  
+  # get genes previously detected and prepare coordinates for arrow direction
+  genes_region <- subsetByOverlaps(gene_res,rect_region,maxgap = 50000)
+  
+  
+  
+  # set the min and max for x-axis
+  xlims <- c(min(start(rect_region), start(genes_region)),
+             max(end(rect_region), end(genes_region)))
+  
+  # subset by overlaps between region of interest and snps in region (with allele frequency data)
+  # make sure to cover the whole region incl genes and Fst extremes
+  alt_frq_per_pop_xtrm_fst_win <- subsetByOverlaps(alt_frq_per_pop_ss, 
+                                                   GRanges(seqnames = chr, IRanges(start = xlims[1], end = xlims[2])), 
+                                                   maxgap = maxgap) 
+  
+  # prepare genomic coordinates
+  gtrack <- GenomeAxisTrack()
+  itrack <- IdeogramTrack(genome = "susScr11", chromosome = chr) 
+  
+  # prepare data tracks one breed at a time
+  dtrack_lw <- DataTrack(
+    alt_frq_per_pop_xtrm_fst_win %>% 
+      as_tibble() %>% 
+      dplyr::select(seqnames, start, end, large_white) %>% 
+      makeGRangesFromDataFrame(keep.extra.columns = TRUE),
+    name = "allele_freq_LW"
+    )
+  
+  dtrack_lr <- DataTrack(
+    alt_frq_per_pop_xtrm_fst_win %>% 
+      as_tibble() %>% 
+      dplyr::select(seqnames, start, end, landrace) %>% 
+      makeGRangesFromDataFrame(keep.extra.columns = TRUE),
+    name = "allele_freq_LR"
+  )
+  
+  dtrack_pt <- DataTrack(
+    alt_frq_per_pop_xtrm_fst_win %>% 
+      as_tibble() %>% 
+      dplyr::select(seqnames, start, end, pietrain) %>% 
+      makeGRangesFromDataFrame(keep.extra.columns = TRUE),
+    name = "allele_freq_PT"
+  )
+  
+  dtrack_du <- DataTrack(
+    alt_frq_per_pop_xtrm_fst_win %>% 
+      as_tibble() %>% 
+      dplyr::select(seqnames, start, end, duroc) %>% 
+      makeGRangesFromDataFrame(keep.extra.columns = TRUE),
+    name = "allele_freq_DU"
+  )
+
+
+  # in case there are no genes in regions, show only data 
+  if(length(genes_region) >= 1){
+    
+    # prepare annotation to only show genes and directions
+    aTrack <- AnnotationTrack(start = start(genes_region),
+                              end = end(genes_region),
+                              chromosome = seqnames(genes_region),
+                              strand = strand(genes_region),
+                              id = genes_region$gene_name,
+                              featureAnnotation = "id",
+                              genome = "susScr11",
+                              name = "Genes")
+    
+    # highlight outlier region
+    htrack <- HighlightTrack(trackList = list(dtrack_lw, dtrack_lr, dtrack_pt, dtrack_du, aTrack),range = rect_region)
+    
+    # plot
+    plotTracks(list(itrack, htrack, gtrack), type = c("p","l"),  background.title = "darkgrey")
+    
+    }else{
+      # highlight outlier region
+      htrack <- HighlightTrack(trackList = list(dtrack_lw, dtrack_lr, dtrack_pt, dtrack_du),range = rect_region)
+      
+      # plot
+      plotTracks(list(itrack, htrack, gtrack), type = c("p","l"),  background.title = "darkgrey")
+    }
+  
+  }
+
+
+```
+
+```{r vis_with_vis_genomic_region_1}
+xtrm_fst_win_red[1]
+vis_genomic_region_1(rect_region = xtrm_fst_win_red[1], maxgap = 65000)
+
+xtrm_fst_win_red[2]
+vis_genomic_region_1(rect_region = xtrm_fst_win_red[2], maxgap = 10000)
+
+xtrm_fst_win_red[3]
+vis_genomic_region_1(rect_region = xtrm_fst_win_red[3], maxgap = 10000)
+```
 

@@ -4,7 +4,240 @@ output: rmdformats::robobook
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, include = FALSE)
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(here)
+library(dplyr)
+library(ggplot2)
+library(vroom)
+library(stringr)
+
+sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv")) %>% 
+  # fix sample id
+  mutate(sample_id2 = str_split(sample_id, "_") %>% sapply(function(x) x[1]))
 ```
 
-# Pending ...
+# Pre-Alignment Metrics 
+
+
+
+# Post-Alignment Metrics
+
+```{r import_bam_cvg_data_internal}
+
+internal_CollectWgsMetrics_q0mq0 <- list.files(here("05_BAM_prep_to_HC/output"), pattern = ".dedup.CollectWgsMetrics_q0mq0.txt", full.names = TRUE) %>% 
+  lapply(function(fl){
+    # extract sample name
+    samp <- fl %>% basename() %>% str_split("[.]") %>% sapply(function(x) x[1])
+    
+    # read data in and add sample name
+    d <- read.table(fl, header = TRUE, dec = ",", comment.char = "#",nrows = 1) %>% 
+      mutate(sample_id = samp) %>% 
+      dplyr::select(sample_id, everything())
+  }) %>% 
+  bind_rows() %>% 
+  mutate(data_set = "internal_q0mq0") %>% 
+  dplyr::select(data_set, everything()) %>% 
+  as_tibble()
+
+
+internal_CollectWgsMetrics_q20mq20 <- list.files(here("05_BAM_prep_to_HC/output"), pattern = ".dedup.CollectWgsMetrics_q20mq20.txt", full.names = TRUE) %>% 
+  lapply(function(fl){
+    # extract sample name
+    samp <- fl %>% basename() %>% str_split("[.]") %>% sapply(function(x) x[1])
+    
+    # read data in and add sample name
+    d <- read.table(fl, header = TRUE, dec = ",", comment.char = "#",nrows = 1) %>% 
+      mutate(sample_id = samp) %>% 
+      dplyr::select(sample_id, everything())
+  }) %>% 
+  bind_rows() %>% 
+  mutate(data_set = "internal_q20mq20") %>% 
+  dplyr::select(data_set, everything()) %>% 
+  as_tibble()
+
+```
+
+```{r import_bam_cvg_data_external}
+
+external_CollectWgsMetrics_q0mq0 <- list.files(here("06_external_data/output/FINAL"), pattern = ".dedup.CollectWgsMetrics_q0mq0.txt", full.names = TRUE) %>% 
+  lapply(function(fl){
+    # extract sample name
+    samp <- fl %>% basename() %>% str_split("[.]") %>% sapply(function(x) x[1])
+    
+    # read data in and add sample name
+    d <- read.table(fl, header = TRUE, dec = ",", comment.char = "#",nrows = 1) %>% 
+      mutate(sample_id = samp) %>% 
+      dplyr::select(sample_id, everything())
+  }) %>% 
+  bind_rows() %>% 
+  mutate(data_set = "external_q0mq0") %>% 
+  dplyr::select(data_set, everything()) %>% 
+  as_tibble()
+
+
+external_CollectWgsMetrics_q20mq20 <- list.files(here("06_external_data/output/FINAL"), pattern = ".dedup.CollectWgsMetrics_q20mq20.txt", full.names = TRUE) %>% 
+  lapply(function(fl){
+    # extract sample name
+    samp <- fl %>% basename() %>% str_split("[.]") %>% sapply(function(x) x[1])
+    
+    # read data in and add sample name
+    d <- read.table(fl, header = TRUE, dec = ",", comment.char = "#",nrows = 1) %>% 
+      mutate(sample_id = samp) %>% 
+      dplyr::select(sample_id, everything())
+  }) %>% 
+  bind_rows() %>% 
+  mutate(data_set = "external_q20mq20") %>% 
+  dplyr::select(data_set, everything()) %>% 
+  as_tibble() 
+
+```
+
+```{r combine_data_and_sample_info}
+
+full_CollectWgsMetrics_data <- bind_rows(
+  internal_CollectWgsMetrics_q0mq0,
+  internal_CollectWgsMetrics_q20mq20,
+  external_CollectWgsMetrics_q0mq0,
+  external_CollectWgsMetrics_q20mq20
+  ) %>% 
+  # fix sample id
+  mutate(sample_id2 = str_split(sample_id, "_") %>% sapply(function(x) x[1])) %>% 
+  inner_join(sample_info, by = "sample_id2") %>% 
+  mutate(data_set = factor(data_set, levels = c("internal_q0mq0","internal_q20mq20","external_q0mq0","external_q20mq20")),
+         breed = factor(breed, levels = c("Large White","Pietrain", "Landrace", "Duroc","European Wild Boar"))) #208 x 34
+
+```
+
+### Coverage summary
+
+```{r summary_cvg_table}
+full_CollectWgsMetrics_data %>% 
+  group_by(breed, data_set) %>% 
+  summarise(n = n(), mean_cvg = mean(MEAN_COVERAGE), sd_cvg = sd(MEAN_COVERAGE)) %>%
+  arrange(breed, data_set) %>% 
+  knitr::kable(digits = 2)
+
+```
+
+```{r barplots_cvg}
+
+full_CollectWgsMetrics_data %>% 
+  group_by(data_set, breed) %>% 
+  summarise(n = n(), mean_cvg = mean(MEAN_COVERAGE), sd_cvg = sd(MEAN_COVERAGE)) %>% 
+  ggplot(aes(x = breed, y = mean_cvg, fill = data_set)) +
+    geom_bar(position = position_dodge(width=0.9), stat = "identity") +
+    geom_errorbar(aes(ymin = mean_cvg-sd_cvg, ymax = mean_cvg+sd_cvg), position = position_dodge(width=0.9), colour="black", width=0.3) +
+    scale_y_continuous(expand = c(1/50,1/50), breaks = scales::pretty_breaks(n = 10)) +
+    theme_bw(base_size = 12) +
+    facet_wrap(~breed, scales = "free", ncol = 2) +
+    xlab(NULL)
+
+```
+
+### Coverage by sample
+```{r vis_cvg_by_sample_hor,  fig.height = 5, fig.width = 10}
+
+full_CollectWgsMetrics_data %>% 
+  ggplot(aes(x = sample_id2, y = MEAN_COVERAGE, fill = data_set)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    theme_bw(base_size = 12) +
+    scale_fill_brewer(palette = "Dark2") +
+    scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 20)) +
+    facet_wrap(~breed, nrow = 1, scales = "free_x") +
+    xlab(NULL) +
+    theme(axis.text.x = element_blank(),
+          legend.position = "bottom",
+          legend.title = element_blank()) +
+    ggtitle(label = "Mean Coverage BAMs before BQSR")
+
+```
+
+```{r vis_cvg_by_sample_vert,  fig.height = 15, fig.width = 10}
+
+full_CollectWgsMetrics_data %>% 
+  ggplot(aes(x = sample_id2, y = MEAN_COVERAGE, fill = data_set)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    theme_bw(base_size = 12) +
+    scale_fill_brewer(palette = "Dark2") +
+    scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 10)) +
+    facet_wrap(~breed, nrow = 5, scales = "free", strip.position = "right") +
+    xlab(NULL) +
+    theme(legend.title = element_blank(),
+          axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 8)) +
+    ggtitle(label = "Mean Coverage BAMs before BQSR")
+```
+
+### Insert size
+```{r import_insert_size_data}
+
+internal_CollectInsertSizeMetrics <- list.files(here("05_BAM_prep_to_HC/output"), pattern = ".dedup.CollectInsertSizeMetrics.tab", full.names = TRUE) %>% 
+  lapply(function(fl){
+    # extract sample name
+    samp <- fl %>% basename() %>% str_split("[.]") %>% sapply(function(x) x[1])
+    
+    # read data in and add sample name
+    d <- read.table(fl, header = TRUE, dec = ",", skip = 6,nrows = 1, sep = "\t") %>% 
+      mutate(sample_id = samp) %>% 
+      dplyr::select(sample_id, everything())
+  }) %>% 
+  bind_rows() %>% 
+  mutate(data_set = "internal") %>% 
+  dplyr::select(data_set, everything()) %>% 
+  as_tibble() 
+
+
+
+external_CollectInsertSizeMetrics <- list.files(here("06_external_data/output/FINAL"), pattern = ".dedup.CollectInsertSizeMetrics.tab", full.names = TRUE) %>% 
+  lapply(function(fl){
+    # extract sample name
+    samp <- fl %>% basename() %>% str_split("[.]") %>% sapply(function(x) x[1])
+    
+    # read data in and add sample name
+    d <- read.table(fl, header = TRUE, dec = ",", skip = 6,nrows = 1, sep = "\t") %>% 
+      mutate(sample_id = samp) %>% 
+      dplyr::select(sample_id, everything())
+  }) %>% 
+  bind_rows() %>% 
+  mutate(data_set = "external") %>% 
+  dplyr::select(data_set, everything()) %>% 
+  as_tibble() 
+
+
+```
+
+```{r combine_insert_size_data}
+full_CollectInsertSizeMetrics_data <- bind_rows(
+  internal_CollectInsertSizeMetrics,
+  external_CollectInsertSizeMetrics
+  ) %>% 
+  # fix sample id
+  mutate(sample_id2 = str_split(sample_id, "_") %>% sapply(function(x) x[1])) %>% 
+  inner_join(sample_info, by = "sample_id2") %>% 
+  mutate(data_set = factor(data_set, levels = c("internal","external")),
+         breed = factor(breed, levels = c("Large White","Pietrain", "Landrace", "Duroc","European Wild Boar"))) #104 x 29
+```
+
+```{r summary_table_insert_size}
+
+full_CollectInsertSizeMetrics_data %>% 
+  group_by(data_set) %>% 
+  summarise(n = n(), mean_size = mean(MEAN_INSERT_SIZE), sd_size = sd(MEAN_INSERT_SIZE)) %>% 
+  knitr::kable()
+
+```
+
+```{r vis_insert_sizes}
+full_CollectInsertSizeMetrics_data %>% 
+  group_by(data_set, breed) %>% 
+  summarise(n = n(), mean_size = mean(MEAN_INSERT_SIZE), sd_size = sd(MEAN_INSERT_SIZE)) %>% 
+  ggplot(aes(x = breed, y = mean_size, fill = data_set)) +
+    geom_bar(position = position_dodge(width=0.9), stat = "identity") +
+    geom_errorbar(aes(ymin = mean_size-sd_size, ymax = mean_size+sd_size), position = position_dodge(width=0.9), colour="black", width=0.3) +
+    scale_y_continuous(expand = c(1/50,1/50), breaks = scales::pretty_breaks(n = 10)) +
+    theme_bw(base_size = 12) +
+    facet_wrap(~breed, scales = "free_x", ncol = 5) +
+    ggtitle(label = "Mean Insert Size (+/- SD)") +
+    xlab(NULL)
+```
+

@@ -1,0 +1,332 @@
+---
+title: "Fst dam vs sire - outlier analysis"
+output: rmdformats::robobook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(here)
+library(vroom)
+library(dplyr)
+library(knitr)
+library(ggpubr)
+library(GenomicRanges)
+library(WebGestaltR)
+```
+
+```{r import_data, include=FALSE} 
+
+fst_win_dam_sire <- vroom(here("13_Fst/output/fst_win_dam_vs_sire.windowed.weir.fst"))
+
+fst_win_dam_sire$MEAN_FST %>% range()
+
+fst_win_dam_sire$MEAN_FST %>% summary()
+
+fst_win_dam_sire %>% dim() #89917     6
+
+sum(fst_win_dam_sire$MEAN_FST > 0.5) 
+
+```
+
+```{r prepare_data} 
+
+fst_win_dam_sire_prep <- fst_win_dam_sire %>% 
+  # keep windows with at least 10 SNPs
+  filter(N_VARIANTS >= 10) %>% 
+  # calculate z-scores - exlcuding sex chromosomes
+  filter(CHROM %in% 1:18) %>% 
+  mutate(zFst = scale(MEAN_FST)[,1]) %>% 
+  ungroup() %>% 
+  mutate(CHROM = factor(CHROM, levels = 1:18))
+
+```
+
+```{r gene_set} 
+
+ssc_gene_set <- readRDS(here("ref_ensemble95/gene_set/ssc_gene_set.rds"))
+
+```
+
+```{r qtl_set, include=FALSE}
+
+qtl_set <- readRDS(here("pigQTL/qtl_set.rds"))
+
+qtl_set %>% 
+  as.data.frame() %>% 
+  group_by(qtl_class) %>% 
+  summarise(n())
+
+```
+
+# Summary
+```{r} 
+
+fst_win_dam_sire_prep %>% 
+  dplyr::select(CHROM, BIN_START, BIN_END, MEAN_FST, zFst) %>% 
+  reshape2::melt(id.vars = c("CHROM","BIN_START","BIN_END")) %>% 
+  group_by(variable) %>% 
+  summarise(min = min(value), 
+            mean = mean(value), 
+            median = median(value), 
+            q99 = quantile(value, 0.99),
+            q99.5 = quantile(value, 0.995),
+            q99.9 = quantile(value, 0.999),
+            max = max(value)) %>% 
+  kable(digits = 2)
+
+```
+
+# Windowed Fst distribution
+```{r}  
+
+ggarrange(
+  
+  fst_win_dam_sire_prep %>% 
+    dplyr::select(CHROM, BIN_START, BIN_END, MEAN_FST, zFst) %>% 
+    reshape2::melt(id.vars = c("CHROM","BIN_START","BIN_END")) %>%
+    ggplot(aes(x = value)) +
+      geom_histogram(bins = 50) +
+      facet_wrap(~variable, nrow = 2, scales = "free") +
+      theme_bw(base_size = 12) +
+      ylab(NULL) +
+      xlab(NULL),
+  
+  fst_win_dam_sire_prep %>% 
+    dplyr::select(CHROM, BIN_START, BIN_END, MEAN_FST, zFst) %>% 
+    reshape2::melt(id.vars = c("CHROM","BIN_START","BIN_END")) %>% 
+    ggplot(aes(y = variable, x = value)) +
+      geom_violin() +
+      facet_wrap(~variable, nrow = 2, scales = "free") +
+      theme_bw(base_size = 12) +
+      theme(axis.text.y = element_blank()) +
+      ylab(NULL) +
+      xlab(NULL),
+  
+  nrow = 1,
+  ncol = 2
+  
+)
+
+```
+
+# Genomic distribution
+
+```{r make_manhattan_plots, eval = FALSE}  
+
+# https://danielroelfs.com/blog/how-i-create-manhattan-plots-using-ggplot/
+
+data_cum <- fst_win_dam_sire_prep %>% 
+  mutate(center = (BIN_START + (BIN_END-BIN_START)/2 )) %>% 
+  group_by(CHROM) %>% 
+  summarise(max_bp = max(center)) %>% 
+  mutate(bp_add = lag(cumsum(max_bp), default = 0)) %>% 
+  dplyr::select(CHROM, bp_add)
+
+fst_win_dam_sire_prep_manhattan <- fst_win_dam_sire_prep %>% 
+  mutate(center = (BIN_START + (BIN_END-BIN_START)/2 )) %>% 
+  inner_join(data_cum, by = "CHROM") %>% 
+  mutate(bp_cum = center + bp_add)
+
+
+axis_set <- fst_win_dam_sire_prep_manhattan %>% 
+  group_by(CHROM) %>% 
+  summarise(center = mean(bp_cum))
+
+p_man_fst_autosomes <- fst_win_dam_sire_prep_manhattan %>% 
+  ggplot(aes(x = bp_cum, y = MEAN_FST, color = CHROM)) +
+  geom_point(alpha = 0.75) +
+  scale_x_continuous(label = axis_set$CHROM, breaks = axis_set$center, expand = c(1/1000,1/1000)) +
+  scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 10)) +
+  scale_color_manual(values = rep(c("black","darkgrey"), nrow(axis_set)) ) +
+  labs(x = NULL) +
+  theme_minimal(base_size = 12) +
+  geom_hline(yintercept = quantile(fst_win_dam_sire_prep$MEAN_FST, c(0.99, 0.999)), linetype = "dashed", color = "red", size = 1, alpha = 0.7) +
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    axis.text.x = element_text(face = "bold", size = 12, vjust = 3)
+  )
+
+p_man_z_fst_autosomes <- fst_win_dam_sire_prep_manhattan %>% 
+  ggplot(aes(x = bp_cum, y = zFst, color = CHROM)) +
+  geom_point(alpha = 0.75) +
+  scale_x_continuous(label = axis_set$CHROM, breaks = axis_set$center, expand = c(1/1000,1/1000)) +
+  scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 10)) +
+  scale_color_manual(values = rep(c("black","darkgrey"), nrow(axis_set)) ) +
+  labs(x = NULL) +
+  theme_minimal(base_size = 12) +
+  geom_hline(yintercept = quantile(fst_win_dam_sire_prep$zFst, c(0.99, 0.999)), linetype = "dashed", color = "red", size = 1, alpha = 0.7) +
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    axis.text.x = element_text(face = "bold", size = 12, vjust = 3)
+  )
+
+
+png(here("00_analysis/figures/manhattan_genomewide_fst_outliers.png"), res = 300, width = 4000, height = 2000, units = "px"); print(p_man_fst_autosomes); dev.off()
+png(here("00_analysis/figures/manhattan_genomewide_z_fst_outliers.png"), res = 300, width = 4000, height = 2000, units = "px"); print(p_man_z_fst_autosomes); dev.off()
+```
+
+```{r display_manhattan_plots}
+
+knitr::include_graphics(c(here("00_analysis/figures/manhattan_genomewide_fst_outliers.png"),
+                        here("00_analysis/figures/manhattan_genomewide_z_fst_outliers.png")))
+
+```
+
+# Genes in outlier regions
+
+Genes in/near regions of extreme Fst (outliers) were identified.
+
+Outliers are defined as regions in the top 0.1% of the genomic distribution, plus all adjacent regions in the top 1%. 
+
+Regions in the top1% not nearby top0.1% regions are not considered outliers.
+
+```{r define_outlier_regions} 
+
+cutoffs <- fst_win_dam_sire_prep$zFst %>% quantile(c(0.99, 0.999))
+
+outliers_1pct <- fst_win_dam_sire_prep %>% 
+  filter(zFst > cutoffs[1]) %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = TRUE) %>% 
+  # merge adjacent outliers
+  reduce(min.gapwidth = 1)
+
+outliers_0.1pct <- fst_win_dam_sire_prep %>% 
+  filter(zFst > cutoffs[2]) %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = TRUE) %>% 
+  # merge adjacent outliers
+  reduce(min.gapwidth = 1)
+
+# keep top 1% windows near top 0.1% windows
+outliers_1pct_near_outliers_0.1pct <- subsetByOverlaps(outliers_1pct, outliers_0.1pct, maxgap = 0)
+
+# combine windows
+outliers <- c(outliers_0.1pct, outliers_1pct_near_outliers_0.1pct) %>% sort()
+
+``` 
+
+```{r find_genes} 
+
+genes_outliers <- subsetByOverlaps(ssc_gene_set, outliers, maxgap = 50000)
+
+genes_outliers %>% as_tibble() %>% write.csv(here("00_analysis/data/genes_outliers_fst.csv"))
+
+
+```
+
+There are `r  genes_outliers %>% length()` genes in outlier regions.
+
+### Genes in outlier regions 
+```{r display_genes}
+
+genes_outliers %>%
+  as_tibble() %>% 
+  arrange(seqnames, start, end) %>% 
+  DT::datatable(rownames = FALSE, options = list(pageLength = 20))
+
+```
+
+### Enrichment Analysis
+
+Enrichment analyis was done using all `r  genes_outliers %>% length()` genes.
+
+There were no significant results (FDR < 0.1) for any of the gene lists.
+
+```{r function_run_WebGestaltR, eval = FALSE} 
+#---------------------------
+# function_run_WebGestaltR
+#---------------------------
+
+run_WebGestaltR <- function(
+  interestGene, # vector of genes as input
+  projectName, # the suffix to which "Project_" is appended
+  enrichDatabase, # the data base to query  
+  outputDirectory # where to store the results
+  ){
+  res <- WebGestaltR(
+    enrichDatabase = enrichDatabase,
+    enrichMethod = "ORA",
+    organism = "sscrofa",
+    interestGene = interestGene,
+    interestGeneType = "ensembl_gene_id",
+    referenceSet = "genome",
+    sigMethod = "fdr",
+    fdrMethod = "BH",
+    fdrThr = 0.1,
+    topThr = 100,
+    reportNum = 20,
+    isOutput = TRUE,
+    outputDirectory = outputDirectory,
+    hostName = "http://www.webgestalt.org/",
+    projectName = projectName
+  )
+  
+  write.csv(
+    res, 
+    file.path(outputDirectory,paste0("Project_", projectName), paste0(enrichDatabase,"_sig_results.csv"))
+  )
+}
+
+```
+
+```{r run_WebGestaltR, eval = FALSE} 
+run_WebGestaltR(
+  interestGene=unique(genes_outliers$gene_id),
+  projectName="WebGestaltR_fst",
+  enrichDatabase="geneontology_Biological_Process",
+  outputDirectory=here("00_analysis/data/webgestalt_fst/GOBP")
+)
+
+
+run_WebGestaltR(
+  interestGene=unique(genes_outliers$gene_id),
+  projectName="WebGestaltR_fst",
+  enrichDatabase="pathway_KEGG",
+  outputDirectory=here("00_analysis/data/webgestalt_fst/KEGG")
+)
+
+```
+
+# QTLs in outlier regions
+
+Outliers were overlapped with QTLs.
+
+QTLs were downloaded as a gff file from https://www.animalgenome.org/cgi-bin/QTLdb/SS/index ("All data by bp (on SS11.1 in gff format )") on April 1st.
+
+### Number of QTLs overlapping outlier regions 
+```{r summary_qtl_class_dam} 
+
+qtl_res <- subsetByOverlaps(qtl_set, outliers, maxgap = 0)
+
+qtl_res %>% 
+  as.data.frame() %>% 
+  group_by(qtl_class, seqnames) %>% 
+  mutate(seqnames = paste0("chr",seqnames),
+         seqnames = factor(seqnames, levels = c(paste0("chr", 1:18)))) %>% 
+  summarise(n_qtls = n()) %>% 
+  reshape2::dcast(qtl_class ~ seqnames, value.var = "n_qtls") %>% 
+  knitr::kable()
+```
+
+### Number of QTLs overlapping outliers and QTL names 
+```{r summary_qtl_class_and_name_dam} 
+
+qtl_res %>% 
+  as.data.frame() %>% 
+  dplyr::group_by(qtl_class, seqnames) %>% 
+  mutate(seqnames = paste0("chr",seqnames)) %>% 
+  summarise(n_qtls = n(), qtl_names = paste(unique(qtl_name), collapse = " / ")) %>% 
+  DT::datatable(rownames = FALSE)
+
+```
+
+
+
+
+
