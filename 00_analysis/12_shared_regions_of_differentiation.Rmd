@@ -1,0 +1,109 @@
+---
+title: "Shared Genetic Differentiation from EWB"
+output: rmdformats::robobook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(here)
+library(vroom)
+library(dplyr)
+library(knitr)
+library(ggpubr)
+library(GenomicRanges)
+library(WebGestaltR)
+```
+
+# Intro
+Regions of extreme genetic differentiation were previously detected between dam or sire gorups relative to european wild boar.
+
+These analysis were done in separate reports, for clarity.
+
+This document compares the outlier regions detected for dam and sire.
+
+# Shared genes in outlier Regions
+
+```{r import_gene_lists}
+
+genes_outliers_fst_dam_ewb <- here("00_analysis/data/genes_outliers_fst_dam_ewb.csv") %>% vroom()
+
+genes_outliers_fst_sire_ewb <- here("00_analysis/data/genes_outliers_fst_sire_ewb.csv") %>% vroom()
+
+```
+
+```{r find_shared_genes}
+
+shared_genes <- inner_join(genes_outliers_fst_dam_ewb %>% dplyr::select(seqnames,start, end, gene_id, gene_name, gene_biotype), 
+                           genes_outliers_fst_sire_ewb %>% dplyr::select(seqnames,start, end, gene_id, gene_name, gene_biotype),
+                           by = c("seqnames","start", "end", "gene_id","gene_name", "gene_biotype")) %>% 
+  arrange(seqnames, start, end)
+
+```
+
+There are `r nrow(shared_genes)` shared genes in outliers regions detected for dam and sire groups.
+
+```{r display_table}
+
+shared_genes %>% DT::datatable(rownames = FALSE, options = list(pageLength = 40))
+
+```
+
+# Enrichment analysis
+
+No significant gene set is identified based on FDR 0.1!
+
+```{r function_run_WebGestaltR, eval = FALSE} 
+#---------------------------
+# function_run_WebGestaltR
+#---------------------------
+
+run_WebGestaltR <- function(
+  interestGene, # vector of genes as input
+  projectName, # the suffix to which "Project_" is appended
+  enrichDatabase, # the data base to query  
+  outputDirectory # where to store the results
+  ){
+  res <- WebGestaltR(
+    enrichDatabase = enrichDatabase,
+    enrichMethod = "ORA",
+    organism = "sscrofa",
+    interestGene = interestGene,
+    interestGeneType = "ensembl_gene_id",
+    referenceSet = "genome",
+    sigMethod = "fdr",
+    fdrMethod = "BH",
+    fdrThr = 0.1,
+    topThr = 100,
+    reportNum = 20,
+    isOutput = TRUE,
+    outputDirectory = outputDirectory,
+    hostName = "http://www.webgestalt.org/",
+    projectName = projectName
+  )
+  
+  write.csv(
+    res, 
+    file.path(outputDirectory,paste0("Project_", projectName), paste0(enrichDatabase,"_sig_results.csv"))
+  )
+}
+
+```
+
+```{r run_WebGestaltR, eval = FALSE} 
+run_WebGestaltR(
+  interestGene=unique(shared_genes$gene_id),
+  projectName="GOBP",
+  enrichDatabase="geneontology_Biological_Process",
+  outputDirectory=here("00_analysis/data/WebGestaltR_shared_fst_vs_ewb")
+)
+
+
+run_WebGestaltR(
+  interestGene=unique(shared_genes$gene_id),
+  projectName="KEGG",
+  enrichDatabase="pathway_KEGG",
+  outputDirectory=here("00_analysis/data/WebGestaltR_shared_fst_vs_ewb")
+)
+
+```

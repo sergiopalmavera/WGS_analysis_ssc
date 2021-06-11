@@ -1,0 +1,365 @@
+---
+title: "Regions of Distinct Genetic Differentiation"
+output: rmdformats::robobook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(here)
+library(vroom)
+library(dplyr)
+library(knitr)
+library(ggpubr)
+library(GenomicRanges)
+library(WebGestaltR)
+```
+
+```{r import_data, include=FALSE} 
+
+fst_win_dam_ewb <- vroom(here("13_Fst/output/fst_win_dam_vs_EWB.windowed.weir.fst"))
+
+fst_win_sire_ewb <- vroom(here("13_Fst/output/fst_win_sire_vs_EWB.windowed.weir.fst"))
+
+```
+
+```{r prepare_data} 
+
+fst_win_dam_ewb_prep <- fst_win_dam_ewb %>% 
+  # keep windows with at least 10 SNPs
+  filter(N_VARIANTS >= 10) %>% 
+  # calculate z-scores - exlcuding sex chromosomes
+  filter(CHROM %in% 1:18) %>% 
+  mutate(zFst = scale(MEAN_FST)[,1]) %>% 
+  ungroup() %>% 
+  mutate(CHROM = factor(CHROM, levels = 1:18))
+
+fst_win_sire_ewb_prep <- fst_win_sire_ewb %>% 
+  # keep windows with at least 10 SNPs
+  filter(N_VARIANTS >= 10) %>% 
+  # calculate z-scores - exlcuding sex chromosomes
+  filter(CHROM %in% 1:18) %>% 
+  mutate(zFst = scale(MEAN_FST)[,1]) %>% 
+  ungroup() %>% 
+  mutate(CHROM = factor(CHROM, levels = 1:18))
+
+```
+
+```{r gene_set} 
+
+ssc_gene_set <- readRDS(here("ref_ensemble95/gene_set/ssc_gene_set.rds"))
+
+```
+
+```{r qtl_set, include=FALSE}
+
+qtl_set <- readRDS(here("pigQTL/qtl_set.rds"))
+
+qtl_set %>% 
+  as.data.frame() %>% 
+  group_by(qtl_class) %>% 
+  summarise(n())
+
+```
+
+# Intro
+
+This analysis charaterizes regions of high differentiation only for onw group (dam or sire). In order to detect such regions (Regions of Distinct Differentiation), Fst scores relative to European Wild Boar were used to extract regions with extreme windowed-Fst scores in one group that were at the same time lowly differentiated for the other group.
+
+```{r RDD_dam, include=FALSE}
+
+rdd_dam <- inner_join(
+  
+  fst_win_dam_ewb_prep %>% filter(zFst > quantile(zFst, 0.99)) %>% dplyr::select(CHROM, BIN_START, BIN_END),
+  
+  fst_win_sire_ewb_prep %>% filter(zFst < quantile(zFst, 0.5)) %>% dplyr::select(CHROM, BIN_START, BIN_END),
+  
+  by = c("CHROM","BIN_START", "BIN_END")
+)
+
+
+fst_win_dam_ewb_prep %>% filter(zFst > quantile(zFst, 0.99)) %>% .$MEAN_FST %>% summary()
+
+fst_win_sire_ewb_prep %>% filter(zFst < quantile(zFst, 0.5)) %>% .$MEAN_FST %>% summary()
+
+
+```
+
+
+```{r RDD_sire, include=FALSE}
+
+rdd_sire <- inner_join(
+  
+  fst_win_sire_ewb_prep %>% filter(zFst > quantile(zFst, 0.99)) %>% dplyr::select(CHROM, BIN_START, BIN_END),
+  
+  fst_win_dam_ewb_prep %>% filter(zFst < quantile(zFst, 0.5)) %>% dplyr::select(CHROM, BIN_START, BIN_END),
+  
+  by = c("CHROM","BIN_START", "BIN_END")
+)
+
+
+fst_win_sire_ewb_prep %>% filter(zFst > quantile(zFst, 0.99)) %>% .$MEAN_FST %>% summary()
+
+fst_win_dam_ewb_prep %>% filter(zFst < quantile(zFst, 0.5)) %>% .$MEAN_FST %>% summary()
+
+
+```
+
+```{r convert_to_granges}
+
+rdd_dam_gr <- rdd_dam %>% dplyr::rename(seqnames = CHROM, start = BIN_START, end = BIN_END) %>% makeGRangesFromDataFrame()
+
+rdd_sire_gr <- rdd_sire %>% dplyr::rename(seqnames = CHROM, start = BIN_START, end = BIN_END) %>% makeGRangesFromDataFrame()
+```
+
+
+### Summary RDDs dam group
+Regions of extreme differentiation dam group (above quantile 0.99)
+```{r}
+fst_win_dam_ewb_prep %>% filter(zFst > quantile(zFst, 0.99)) %>% .$MEAN_FST %>% summary() 
+```
+
+Same regions in sire-group (below quantile 0.5)
+```{r}
+fst_win_sire_ewb_prep %>% filter(zFst < quantile(zFst, 0.5)) %>% .$MEAN_FST %>% summary()
+```
+
+### Summary RDDs sire group
+Regions of extreme differentiation sire group (above quantile 0.99)
+```{r}
+fst_win_sire_ewb_prep %>% filter(zFst > quantile(zFst, 0.99)) %>% .$MEAN_FST %>% summary() 
+```
+
+Same regions in dam-group (below quantile 0.5)
+```{r}
+fst_win_dam_ewb_prep %>% filter(zFst < quantile(zFst, 0.5)) %>% .$MEAN_FST %>% summary()
+```
+
+
+### Number of windows per chr
+```{r}
+
+full_join(
+  rdd_dam %>% group_by(CHROM) %>% summarise(n_win_dam = n()),
+  rdd_sire %>% group_by(CHROM) %>% summarise(n_win_sire = n()),
+  by = "CHROM"
+  ) %>% 
+  arrange(CHROM) %>% 
+  kable()
+
+```
+
+# Genes in RDDs
+
+```{r find_genes} 
+
+genes_rdd_dams <- subsetByOverlaps(ssc_gene_set, rdd_dam_gr, maxgap = 50000)
+
+genes_rdd_sires <- subsetByOverlaps(ssc_gene_set, rdd_sire_gr, maxgap = 50000)
+
+```
+
+There are `r  genes_rdd_dams %>% length()` genes in dam RDDs. There are `r  genes_rdd_sires %>% length()` genes in sire RDDs.
+
+### Genes in dam RDDs 
+```{r display_genes_rdd_dam}
+
+genes_rdd_dams %>%
+  as_tibble() %>% 
+  arrange(seqnames, start, end) %>% 
+  DT::datatable(rownames = FALSE, options = list(pageLength = 20))
+
+```
+
+### Genes in sire RDDs 
+```{r display_genes_rdd_sire}
+
+genes_rdd_sires %>%
+  as_tibble() %>% 
+  arrange(seqnames, start, end) %>% 
+  DT::datatable(rownames = FALSE, options = list(pageLength = 20))
+
+```
+
+
+### Enrichment Analysis
+
+```{r function_run_WebGestaltR, eval = FALSE} 
+#---------------------------
+# function_run_WebGestaltR
+#---------------------------
+
+run_WebGestaltR <- function(
+  interestGene, # vector of genes as input
+  projectName, # the suffix to which "Project_" is appended
+  enrichDatabase, # the data base to query  
+  outputDirectory # where to store the results
+  ){
+  res <- WebGestaltR(
+    enrichDatabase = enrichDatabase,
+    enrichMethod = "ORA",
+    organism = "sscrofa",
+    interestGene = interestGene,
+    interestGeneType = "ensembl_gene_id",
+    referenceSet = "genome",
+    sigMethod = "fdr",
+    fdrMethod = "BH",
+    fdrThr = 0.1,
+    topThr = 100,
+    reportNum = 20,
+    isOutput = TRUE,
+    outputDirectory = outputDirectory,
+    hostName = "http://www.webgestalt.org/",
+    projectName = projectName
+  )
+  
+  write.csv(
+    res, 
+    file.path(outputDirectory,paste0("Project_", projectName), paste0(enrichDatabase,"_sig_results.csv"))
+  )
+}
+
+```
+
+There were no siginificant terms for Dam-RDD-genes nor Sire-RDD-genes.
+
+```{r run_WebGestaltR_dam_RDD_genes, eval = FALSE} 
+run_WebGestaltR(
+  interestGene=unique(genes_rdd_dams$gene_id),
+  projectName="GOBP",
+  enrichDatabase="geneontology_Biological_Process",
+  outputDirectory=here("00_analysis/data/WebGestaltR_RDD_dam")
+)
+
+
+run_WebGestaltR(
+  interestGene=unique(genes_rdd_dams$gene_id),
+  projectName="KEGG",
+  enrichDatabase="pathway_KEGG",
+  outputDirectory=here("00_analysis/data/WebGestaltR_RDD_dam")
+)
+
+```
+
+```{r run_WebGestaltR_sire_RDD_genes, eval = FALSE} 
+run_WebGestaltR(
+  interestGene=unique(genes_rdd_sires$gene_id),
+  projectName="GOBP",
+  enrichDatabase="geneontology_Biological_Process",
+  outputDirectory=here("00_analysis/data/WebGestaltR_RDD_sire")
+)
+
+
+run_WebGestaltR(
+  interestGene=unique(genes_rdd_sires$gene_id),
+  projectName="KEGG",
+  enrichDatabase="pathway_KEGG",
+  outputDirectory=here("00_analysis/data/WebGestaltR_RDD_sire")
+)
+
+```
+
+# QTLs in RDDs
+
+Outliers were overlapped with QTLs.
+
+QTLs were downloaded as a gff file from https://www.animalgenome.org/cgi-bin/QTLdb/SS/index ("All data by bp (on SS11.1 in gff format )") on April 1st.
+
+### Dam
+
+##### Number of QTLs overlapping RDD-regions
+```{r summary_qtl_class_dam} 
+
+qtl_res_rdd_dam <- subsetByOverlaps(qtl_set, rdd_dam_gr, maxgap = 0)
+
+qtl_res_rdd_dam %>% 
+  as.data.frame() %>% 
+  group_by(qtl_class, seqnames) %>% 
+  mutate(seqnames = paste0("chr",seqnames),
+         seqnames = factor(seqnames, levels = c(paste0("chr", 1:18)))) %>% 
+  summarise(n_qtls = n()) %>% 
+  reshape2::dcast(qtl_class ~ seqnames, value.var = "n_qtls") %>% 
+  knitr::kable()
+```
+
+##### Number of QTLs overlapping RDD-regions with QTL names 
+```{r summary_qtl_class_and_name_dam} 
+
+qtl_res_rdd_dam %>% 
+  as.data.frame() %>% 
+  dplyr::group_by(qtl_class, seqnames) %>% 
+  mutate(seqnames = paste0("chr",seqnames)) %>% 
+  summarise(n_qtls = n(), qtl_names = paste(unique(qtl_name), collapse = " / ")) %>% 
+  DT::datatable(rownames = FALSE)
+
+```
+
+
+### Sire
+
+##### Number of QTLs overlapping RDD-regions
+```{r summary_qtl_class_sire} 
+
+qtl_res_rdd_sire <- subsetByOverlaps(qtl_set, rdd_sire_gr, maxgap = 0)
+
+qtl_res_rdd_sire %>% 
+  as.data.frame() %>% 
+  group_by(qtl_class, seqnames) %>% 
+  mutate(seqnames = paste0("chr",seqnames),
+         seqnames = factor(seqnames, levels = c(paste0("chr", 1:18)))) %>% 
+  summarise(n_qtls = n()) %>% 
+  reshape2::dcast(qtl_class ~ seqnames, value.var = "n_qtls") %>% 
+  knitr::kable()
+```
+
+##### Number of QTLs overlapping RDD-regions with QTL names 
+```{r summary_qtl_class_and_name_sire} 
+
+qtl_res_rdd_sire %>% 
+  as.data.frame() %>% 
+  dplyr::group_by(qtl_class, seqnames) %>% 
+  mutate(seqnames = paste0("chr",seqnames)) %>% 
+  summarise(n_qtls = n(), qtl_names = paste(unique(qtl_name), collapse = " / ")) %>% 
+  DT::datatable(rownames = FALSE)
+
+```
+
+# Are RDD genes in other gene-lists?
+
+```{r import_gene_lists}
+genes_outliers_fst <- read.csv(here("00_analysis/data/genes_outliers_fst.csv")) %>% as_tibble() %>% dplyr::select(-X)
+
+genes_outliers_sire_pi_ratio <- read.csv(here("00_analysis/data/genes_outliers_sire_pi_ratio.csv")) %>% as_tibble() %>% dplyr::select(-X)
+
+genes_outliers_dam_pi_ratio <- read.csv(here("00_analysis/data/genes_outliers_dam_pi_ratio.csv")) %>% as_tibble() %>% dplyr::select(-X)
+
+```
+
+### Dam
+
+##### Fst Dam-Sire
+```{r}
+genes_outliers_fst %>% filter(gene_id %in% genes_rdd_dams$gene_id) %>% kable()
+```
+
+
+##### Pi_ratio Dam-Sire
+```{r}
+genes_outliers_dam_pi_ratio %>% filter(gene_id %in% genes_rdd_dams$gene_id) %>% kable()
+```
+
+
+### Sire
+
+##### Fst Dam-Sire
+```{r}
+genes_outliers_fst %>% filter(gene_id %in% genes_rdd_sires$gene_id) %>% arrange(seqnames, start, end) %>% kable()
+```
+
+
+##### Pi_ratio Dam-Sire
+```{r}
+genes_outliers_sire_pi_ratio %>% filter(gene_id %in% genes_rdd_sires$gene_id) %>% kable()
+```
+
+

@@ -1,0 +1,235 @@
+---
+title: "Gene Inspection"
+output: 
+  rmdformats::robobook:
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+library(dplyr)
+library(here)
+library(vroom)
+library(knitr)
+library(stringr)
+```
+
+```{r import_gene_lists} 
+
+genes_outliers_fst_dam_sire <- read.csv(here("00_analysis/data/genes_outliers_fst.csv")) %>% as_tibble()
+
+genes_outliers_sire_pi_ratio <- read.csv(here("00_analysis/data/genes_outliers_sire_pi_ratio.csv")) %>% as_tibble()
+
+genes_outliers_dam_pi_ratio <- read.csv(here("00_analysis/data/genes_outliers_dam_pi_ratio.csv")) %>% as_tibble()
+
+genes_outliers_fst_dam_ewb <- here("00_analysis/data/genes_outliers_fst_dam_ewb.csv") %>% vroom()
+
+genes_outliers_fst_sire_ewb <- here("00_analysis/data/genes_outliers_fst_sire_ewb.csv") %>% vroom()
+
+
+# combine gene lists
+gene_lists <- list(fst_dam_sire = genes_outliers_fst_dam_sire,
+     sire_pi_ratio = genes_outliers_sire_pi_ratio,
+     dam_pi_ratio = genes_outliers_dam_pi_ratio, 
+     fst_dam_ewb = genes_outliers_fst_dam_ewb,
+     fst_sire_ewb = genes_outliers_fst_sire_ewb) %>% 
+  bind_rows(.id = "list") %>% 
+  dplyr::select(list, gene_id, gene_name) %>% 
+  mutate(list = factor(list, levels = c("fst_dam_sire","fst_dam_ewb","fst_sire_ewb","sire_pi_ratio","dam_pi_ratio")))
+
+gns <- gene_lists$gene_id %>% unique()
+
+```
+
+```{r add_GOBP_and_export, eval = FALSE}
+library(biomaRt)
+
+mart <- useDataset(dataset = "sscrofa_gene_ensembl", mart = useMart("ENSEMBL_MART_ENSEMBL", host = "www.ensembl.org"))
+
+gobp_terms <- getBM(attributes = c("ensembl_gene_id","external_gene_name","name_1006","namespace_1003","go_id"),
+                              filters = "ensembl_gene_id", 
+                              values = gns,
+                              mart = mart) %>% 
+  filter(namespace_1003 == "biological_process") %>% 
+  mutate(gobp_goid = paste0(name_1006,"(",go_id,")")) #1539    6
+
+write.csv(gobp_terms, here("00_analysis/data/genes_of_interest_and_gobp.csv"))
+
+```
+
+```{r add_KEGG_and_export, eval = FALSE}
+library(KEGGREST) #BiocManager::install("KEGGREST")
+
+# convert ensembl ids to entrez ids
+ensembl_to_entrez <- getBM(attributes = c("ensembl_gene_id", "entrezgene_id"),#"kegg_enzyme"),
+      filters = "ensembl_gene_id", 
+      values = gns,
+      mart = mart) 
+
+ensembl_to_entrez <- ensembl_to_entrez %>% 
+  filter(!is.na(entrezgene_id)) %>% 
+  mutate(ssc_entrezgene_id = paste0("ssc:",entrezgene_id))
+
+# genes to query
+tmp <- unique(ensembl_to_entrez$ssc_entrezgene_id) #values: gene ensembl ids
+
+# indixes to split data
+# only 10 genes at a time are allowed
+length(tmp)
+query_df <- data.frame(start = seq(1, length(tmp), 10)) %>% mutate(end = start + 9)
+head(query_df)
+tail(query_df)
+
+# query in batches of max 10 genes
+KEGGs <- lapply(1:nrow(query_df), function(i){
+  
+  print(i)
+
+  query_genes <- tmp[query_df$start[i]:query_df$end[i]]
+
+  kegg_res <- keggGet(query_genes) %>% 
+    lapply(function(x){ 
+      data.frame(pathway_id = names(x$PATHWAY) , pathway = x$PATHWAY ) %>% 
+        mutate(entrez_gene = x$ENTRY %>% as.integer()) %>% 
+        dplyr::select(entrez_gene, everything())
+      }) %>% 
+    bind_rows()
+  
+  if(nrow(kegg_res) == 0){
+    print("Neither gene matched KEGG terms")
+  }else{
+    kegg_res %>% 
+      inner_join(ensembl_to_entrez, by = c("entrez_gene"="entrezgene_id")) 
+  }
+  }) 
+
+# export results
+KEGGs %>% bind_rows() %>% unique() %>% as_tibble() %>% dplyr::select(-mmu_entrezgene_id) %>% write.csv("00_analysis/data/genes_of_interest_and_KEGG.csv")
+```
+
+```{r gene_gene_description, eval = FALSE}
+
+gn_descr <-  getBM(attributes = c("ensembl_gene_id","external_gene_name","description"),
+                  filters = "ensembl_gene_id", 
+                  values = gns,
+                  mart = mart)
+
+write.csv(gn_descr, here("00_analysis/data/genes_of_interest_and_description.csv"))
+
+```
+
+
+```{r import_GOBP_and_KEGG_annotations, include=FALSE}
+
+GOBPs <- here("00_analysis/data/genes_of_interest_and_gobp.csv") %>% read.csv() %>% as_tibble() %>% dplyr::select(-X)
+
+KEGGs <- here("00_analysis/data/genes_of_interest_and_KEGG.csv") %>% read.csv() %>% as_tibble() %>% dplyr::select(-X)
+
+gene_description <- here("00_analysis/data/genes_of_interest_and_description.csv") %>% read.csv() %>% as_tibble() %>% dplyr::select(-X)
+```
+
+
+
+# Intro
+
+This documents collects information for each gene detected in outlier regions for:
+
+* Fst Dam vs Sire
+
+* Pi ratio low diversity in dam
+
+* Pi ratio low diversity in sire
+
+* Fst Dam vs wild boar
+
+* Fst Sire vs wild boar
+
+Information for each gene was collected mostly from ensembl, ncbi-gene and pubmed.
+
+```{r}
+gene_lists %>% 
+  group_by(list) %>% 
+  summarise(n = n()) %>% 
+  kable(caption = "Number of genes per list")
+```
+
+# Usefull information and lists
+
+## Genes found in more than one list
+
+Genes detected by different methods to evaluate divergence between genomes of dam and sire gorups.
+
+```{r, include=FALSE}
+# find genes found in more than one list
+shared_genes <- gene_lists %>% 
+  group_by(gene_id, gene_name) %>% 
+  summarise(n=n()) %>% 
+  filter(n > 1)
+  
+# display repeated genes
+shared_genes_wide <- gene_lists %>% 
+  reshape2::dcast(gene_id + gene_name ~ list, fun.aggregate = length) %>% 
+  filter(gene_id %in% shared_genes$gene_id) %>% 
+  as_tibble() 
+
+shared_genes_wide[,3:7] %>% apply(1,sum) %>% max() # genes appear repeated in max 2 lists.
+
+
+```
+
+There are `r gns %>% length()` genes in total, Of which `r nrow(shared_genes)` were found by more than one method. 
+
+Genes appear repeated in no more than 2 lists.
+
+For each pair of lists genes were analyzed.
+
+```{r display_shared_genes}
+shared_genes_wide %>% DT::datatable(rownames = FALSE, options = list(pageLength = 20), caption = "Gene ids and corresponding lists")
+```
+
+```{r, fig.width=5, fig.height=8}
+pheatmap::pheatmap(shared_genes_wide[,3:7], show_rownames = FALSE, 
+                   main = "Visual representation of gene overlaps among lists", 
+                   color = c("lightgrey","black"), legend_breaks = c(0,1))
+```
+
+## Shared GOBPs
+
+Gene Ontologies Biological Process shared by at least 2 genes.
+
+```{r}
+
+shared_gobps <- GOBPs %>% 
+  mutate(gene_name = ifelse(external_gene_name == "", ensembl_gene_id, external_gene_name)) %>% 
+  group_by(go_id, name_1006) %>% 
+  summarise(n = n(), genes = paste(gene_name, collapse = " / ")) %>% 
+  filter(n > 1) %>% 
+  arrange(desc(n))
+
+shared_gobps %>% DT::datatable(rownames = FALSE, options = list(pageLenth = 20))
+
+
+```
+
+## Shared KEGGs
+
+KEGGs shared by at least 2 genes.
+
+```{r}
+
+shared_keggs <- KEGGs %>% 
+  # add gene names
+  full_join(gene_lists, by = c("ensembl_gene_id"="gene_id")) %>% 
+  mutate(gene_name = ifelse(is.na(gene_name), ensembl_gene_id, gene_name)) %>% 
+  filter(!is.na(pathway)) %>% 
+  dplyr::group_by(pathway) %>% 
+  summarise(n = n(), genes = paste(gene_name, collapse = " / ")) %>% 
+  filter(n > 1) %>% 
+  arrange(desc(n))
+
+shared_keggs %>% DT::datatable(rownames = FALSE, options = list(pageLenth = 20))
+
+```
+
+
+

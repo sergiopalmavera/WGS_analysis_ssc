@@ -1,0 +1,289 @@
+---
+title: "SnpEff analysis"
+output: 
+  rmdformats::robobook:
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(here)
+library(vroom)
+library(dplyr)
+library(knitr)
+library(stringr)
+#library(ggpubr)
+library(GenomicRanges)
+#library(WebGestaltR)
+library(tidyr)
+```
+
+
+```{r import_SnpEff_results}
+
+csv_fl <- here("16_SNPeff/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered.summary.csv")
+
+effects_by_impact <- csv_fl %>% read.csv(skip = 49, header = TRUE, nrows = 4)
+
+effects_by_functional_class <- csv_fl %>% read.csv(skip = 57, header = TRUE, nrows = 3)
+
+count_by_effects <- csv_fl %>% read.csv(skip = 66, header = TRUE, nrows = 19) %>% 
+  mutate(Type = str_trim(Type))
+
+count_by_genomic_region <- csv_fl %>% read.csv(skip = 89, header = TRUE, nrows = 11)
+
+key_effect_impact <- here("16_SNPeff/output/SnpEff_key_effect_impact.csv") %>% vroom()
+
+snpeff_genes <- here("16_SNPeff/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered.summary.genes.txt") %>% 
+  vroom(skip = 1, col_names = TRUE) %>% 
+  # remove empty entries
+  reshape2::melt(id.vars = c("#GeneName","GeneId","TranscriptId", "BioType")) %>% 
+  filter(value > 0) %>% 
+  as_tibble() %>% 
+  dplyr::rename(gene_name="#GeneName") %>% 
+  mutate(variable = as.character(variable))
+  
+
+```
+
+# Summary tables
+
+### Effects by impact
+```{r}
+effects_by_impact %>% kable()
+```
+
+### Effects by functional class
+```{r}
+effects_by_functional_class %>% kable()
+```
+
+### Counts by effects
+```{r}
+count_by_effects %>% 
+  full_join(dplyr::select(key_effect_impact, Impact, Effect_Seq_Ontology), by = c("Type"="Effect_Seq_Ontology")) %>% 
+  filter(!is.na(Count)) %>% 
+  arrange(desc(Count)) %>%
+  unique() %>% 
+  kable()
+```
+
+### Counts by genomic regions
+```{r}
+count_by_genomic_region %>% arrange(desc(Count)) %>% kable()
+```
+
+# Effects in genes of interest
+```{r import_gene_lists} 
+
+genes_outliers_fst_dam_sire <- read.csv(here("00_analysis/data/genes_outliers_fst.csv")) %>% as_tibble()
+
+genes_outliers_sire_pi_ratio <- read.csv(here("00_analysis/data/genes_outliers_sire_pi_ratio.csv")) %>% as_tibble()
+
+genes_outliers_dam_pi_ratio <- read.csv(here("00_analysis/data/genes_outliers_dam_pi_ratio.csv")) %>% as_tibble()
+
+genes_outliers_fst_dam_ewb <- here("00_analysis/data/genes_outliers_fst_dam_ewb.csv") %>% vroom()
+
+genes_outliers_fst_sire_ewb <- here("00_analysis/data/genes_outliers_fst_sire_ewb.csv") %>% vroom()
+
+```
+
+### Genes shared by 2 or more lists produced by different procedures
+
+Just as a reference for better evaluation of results presented in sections below:
+
+```{r}
+# combine gene lists
+gene_lists <- list(fst_dam_sire = genes_outliers_fst_dam_sire,
+     sire_pi_ratio = genes_outliers_sire_pi_ratio,
+     dam_pi_ratio = genes_outliers_dam_pi_ratio, 
+     fst_dam_ewb = genes_outliers_fst_dam_ewb,
+     fst_sire_ewb = genes_outliers_fst_sire_ewb) %>% 
+  bind_rows(.id = "list") %>% 
+  dplyr::select(list, gene_id, gene_name) %>% 
+  mutate(list = factor(list, levels = c("fst_dam_sire","sire_pi_ratio","dam_pi_ratio","fst_dam_ewb","fst_sire_ewb")))
+
+# find genes found in more than one list
+shared_genes <- gene_lists %>% 
+  group_by(gene_id, gene_name) %>% 
+  summarise(n=n()) %>% 
+  filter(n > 1)
+  
+  
+
+gene_lists %>% 
+  reshape2::dcast(gene_id + gene_name ~ list, fun.aggregate = length) %>% 
+  filter(gene_id %in% shared_genes$gene_id) %>% 
+  as_tibble() %>% 
+  DT::datatable(rownames = FALSE, options = list(pageLength = 20))
+
+```
+
+
+### Genes in Fst outliers (dam vs sire)
+```{r}
+
+genes_outliers_fst_dam_sire %>% 
+  dplyr::select(-gene_name) %>% # remove gene name to avoid conflicts  with snpeff
+  inner_join(snpeff_genes, by = c("gene_id"="GeneId")) %>% #merge by ensembl gene id
+  dplyr::select(-X, -seqnames, -start, -end, -width, -strand, -strand) %>% #remove extra columns  
+  group_by(variable) %>% # group by effect/impact
+  summarise(n_effects = sum(value), n_genes = length(unique(gene_name))) %>% # add effects and nr of genes by effect/impact
+  arrange(desc(n_effects)) %>% 
+  mutate(effect = str_remove(variable, "variants_effect_")) %>% # clean effects/impact column
+  full_join(key_effect_impact, by = c("effect"="Effect_Seq_Ontology")) %>% # add an impact column
+  filter(!is.na(n_effects), !grepl("variants_impact", effect)) %>% # remove empty entries after full join
+  dplyr::select(effect, Impact, n_effects, n_genes) %>% # keep interesting columnd
+  kable()
+```
+
+```{r}
+
+genes_outliers_fst_dam_sire %>% 
+  dplyr::select(-gene_name) %>% # remove gene name to avoid conflicts  with snpeff
+  inner_join(snpeff_genes, by = c("gene_id"="GeneId")) %>% # add snp effects
+  mutate(effect = str_remove(variable, "variants_effect_")) %>% # clean up effect column
+  full_join(key_effect_impact, by = c("effect"="Effect_Seq_Ontology")) %>% # add impacts
+  filter(!is.na(value), !grepl("variants_impact", effect)) %>% # remove unwanted rows
+  filter(Impact %in% c("HIGH","MODERATE")) %>% # keep only high and moderate effects
+  dplyr::select(gene_id, gene_name, effect, Impact) %>% # keep most informative columns
+  unique() %>% # remove duplications
+  arrange(Impact) %>% # arrange alphabetically
+  DT::datatable(caption = "High and Moderate SNP effects by gene of interest", rownames = FALSE)
+```
+
+
+
+### Genes in outliers (dam - pi_ratio)
+```{r} 
+genes_outliers_dam_pi_ratio %>% 
+  dplyr::select(-gene_name) %>% # remove gene name to avoid conflicts  with snpeff
+  inner_join(snpeff_genes, by = c("gene_id"="GeneId")) %>% #merge by ensembl gene id
+  dplyr::select(-X, -seqnames, -start, -end, -width, -strand, -strand) %>% #remove extra columns  
+  group_by(variable) %>% # group by effect/impact
+  summarise(n_effects = sum(value), n_genes = length(unique(gene_name))) %>% # add effects and nr of genes by effect/impact
+  arrange(desc(n_effects)) %>% 
+  mutate(effect = str_remove(variable, "variants_effect_")) %>% # clean effects/impact column
+  full_join(key_effect_impact, by = c("effect"="Effect_Seq_Ontology")) %>% # add an impact column
+  filter(!is.na(n_effects), !grepl("variants_impact", effect)) %>% # remove empty entries after full join
+  dplyr::select(effect, Impact, n_effects, n_genes) %>% # keep interesting columnd
+  kable()
+```
+
+```{r}
+
+genes_outliers_dam_pi_ratio %>% 
+  dplyr::select(-gene_name) %>% # remove gene name to avoid conflicts  with snpeff
+  inner_join(snpeff_genes, by = c("gene_id"="GeneId")) %>% # add snp effects
+  mutate(effect = str_remove(variable, "variants_effect_")) %>% # clean up effect column
+  full_join(key_effect_impact, by = c("effect"="Effect_Seq_Ontology")) %>% # add impacts
+  filter(!is.na(value), !grepl("variants_impact", effect)) %>% # remove unwanted rows
+  filter(Impact %in% c("HIGH","MODERATE")) %>% # keep only high and moderate effects
+  dplyr::select(gene_id, gene_name, effect, Impact) %>% # keep most informative columns
+  unique() %>% # remove duplications
+  arrange(Impact) %>% # arrange alphabetically
+  DT::datatable(caption = "High and Moderate SNP effects by gene of interest", rownames = FALSE)
+```
+
+
+
+### Genes in outliers (sire - pi_ratio)
+```{r} 
+
+genes_outliers_sire_pi_ratio %>% 
+  dplyr::select(-gene_name) %>% # remove gene name to avoid conflicts  with snpeff
+  inner_join(snpeff_genes, by = c("gene_id"="GeneId")) %>% #merge by ensembl gene id
+  dplyr::select(-X, -seqnames, -start, -end, -width, -strand, -strand) %>% #remove extra columns  
+  group_by(variable) %>% # group by effect/impact
+  summarise(n_effects = sum(value), n_genes = length(unique(gene_name))) %>% # add effects and nr of genes by effect/impact
+  arrange(desc(n_effects)) %>% 
+  mutate(effect = str_remove(variable, "variants_effect_")) %>% # clean effects/impact column
+  full_join(key_effect_impact, by = c("effect"="Effect_Seq_Ontology")) %>% # add an impact column
+  filter(!is.na(n_effects), !grepl("variants_impact", effect)) %>% # remove empty entries after full join
+  dplyr::select(effect, Impact, n_effects, n_genes) %>% # keep interesting columnd
+  kable()
+```
+
+```{r}
+
+genes_outliers_sire_pi_ratio %>% 
+  dplyr::select(-gene_name) %>% # remove gene name to avoid conflicts  with snpeff
+  inner_join(snpeff_genes, by = c("gene_id"="GeneId")) %>% # add snp effects
+  mutate(effect = str_remove(variable, "variants_effect_")) %>% # clean up effect column
+  full_join(key_effect_impact, by = c("effect"="Effect_Seq_Ontology")) %>% # add impacts
+  filter(!is.na(value), !grepl("variants_impact", effect)) %>% # remove unwanted rows
+  filter(Impact %in% c("HIGH","MODERATE")) %>% # keep only high and moderate effects
+  dplyr::select(gene_id, gene_name, effect, Impact) %>% # keep most informative columns
+  unique() %>% # remove duplications
+  arrange(Impact) %>% # arrange alphabetically
+  DT::datatable(caption = "High and Moderate SNP effects by gene of interest", rownames = FALSE)
+```
+
+
+### Genes in Fst outliers (dam vs ewb)
+```{r} 
+genes_outliers_fst_dam_ewb %>% 
+  dplyr::select(-gene_name) %>% # remove gene name to avoid conflicts  with snpeff
+  inner_join(snpeff_genes, by = c("gene_id"="GeneId")) %>% #merge by ensembl gene id
+  dplyr::select(-...1, -seqnames, -start, -end, -width, -strand, -strand) %>% #remove extra columns  
+  group_by(variable) %>% # group by effect/impact
+  summarise(n_effects = sum(value), n_genes = length(unique(gene_name))) %>% # add effects and nr of genes by effect/impact
+  arrange(desc(n_effects)) %>% 
+  mutate(effect = str_remove(variable, "variants_effect_")) %>% # clean effects/impact column
+  full_join(key_effect_impact, by = c("effect"="Effect_Seq_Ontology")) %>% # add an impact column
+  filter(!is.na(n_effects), !grepl("variants_impact", effect)) %>% # remove empty entries after full join
+  dplyr::select(effect, Impact, n_effects, n_genes) %>% # keep interesting columnd
+  kable()
+```
+
+```{r}
+
+genes_outliers_fst_dam_ewb %>% 
+  dplyr::select(-gene_name) %>% # remove gene name to avoid conflicts  with snpeff
+  inner_join(snpeff_genes, by = c("gene_id"="GeneId")) %>% # add snp effects
+  mutate(effect = str_remove(variable, "variants_effect_")) %>% # clean up effect column
+  full_join(key_effect_impact, by = c("effect"="Effect_Seq_Ontology")) %>% # add impacts
+  filter(!is.na(value), !grepl("variants_impact", effect)) %>% # remove unwanted rows
+  filter(Impact %in% c("HIGH","MODERATE")) %>% # keep only high and moderate effects
+  dplyr::select(gene_id, gene_name, effect, Impact) %>% # keep most informative columns
+  unique() %>% # remove duplications
+  arrange(Impact) %>% # arrange alphabetically
+  DT::datatable(caption = "High and Moderate SNP effects by gene of interest", rownames = FALSE)
+```
+
+
+
+### Genes in Fst outliers (sire vs ewb)
+```{r} 
+genes_outliers_fst_sire_ewb %>% 
+  dplyr::select(-gene_name) %>% # remove gene name to avoid conflicts  with snpeff
+  inner_join(snpeff_genes, by = c("gene_id"="GeneId")) %>% #merge by ensembl gene id
+  dplyr::select(-...1, -seqnames, -start, -end, -width, -strand, -strand) %>% #remove extra columns  
+  group_by(variable) %>% # group by effect/impact
+  summarise(n_effects = sum(value), n_genes = length(unique(gene_name))) %>% # add effects and nr of genes by effect/impact
+  arrange(desc(n_effects)) %>% 
+  mutate(effect = str_remove(variable, "variants_effect_")) %>% # clean effects/impact column
+  full_join(key_effect_impact, by = c("effect"="Effect_Seq_Ontology")) %>% # add an impact column
+  filter(!is.na(n_effects), !grepl("variants_impact", effect)) %>% # remove empty entries after full join
+  dplyr::select(effect, Impact, n_effects, n_genes) %>% # keep interesting columnd
+  kable()
+```
+
+```{r}
+
+genes_outliers_fst_sire_ewb %>% 
+  dplyr::select(-gene_name) %>% # remove gene name to avoid conflicts  with snpeff
+  inner_join(snpeff_genes, by = c("gene_id"="GeneId")) %>% # add snp effects
+  mutate(effect = str_remove(variable, "variants_effect_")) %>% # clean up effect column
+  full_join(key_effect_impact, by = c("effect"="Effect_Seq_Ontology")) %>% # add impacts
+  filter(!is.na(value), !grepl("variants_impact", effect)) %>% # remove unwanted rows
+  filter(Impact %in% c("HIGH","MODERATE")) %>% # keep only high and moderate effects
+  dplyr::select(gene_id, gene_name, effect, Impact) %>% # keep most informative columns
+  unique() %>% # remove duplications
+  arrange(Impact) %>% # arrange alphabetically
+  DT::datatable(caption = "High and Moderate SNP effects by gene of interest", rownames = FALSE)
+```
+
+
+
