@@ -1,0 +1,145 @@
+---
+title: "SOSFERT VCF metrics"
+output:
+  rmdformats::robobook:
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(tidyverse)
+library(here)
+library(vroom)
+library(knitr)
+library(DT)
+
+
+sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv"))
+
+```
+
+
+```{r main_vcf_metrics}
+cohort_vcf_metrics_detail <- here("10_FinalVCF","output","cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.variant_calling_detail_metrics") %>% 
+  read.delim(stringsAsFactors = F, comment.char = "#", dec = ",") %>% 
+  inner_join(sample_info, by = c("SAMPLE_ALIAS" = "sample_id")) %>% 
+  arrange(breed, SAMPLE_ALIAS)
+
+cohort_vcf_metrics_summary <- here("10_FinalVCF","output","cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.variant_calling_summary_metrics") %>% 
+  read.delim(stringsAsFactors = F, comment.char = "#", dec = ",") 
+```
+
+```{r pop_vcf_metrics}
+
+breed_vcf_metrics_summary <- list(
+  
+  large_white = here("10_FinalVCF","output","cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_Pietrain.variant_calling_summary_metrics") %>%
+    read.delim(stringsAsFactors = F, comment.char = "#", dec = ",") ,
+  
+  pietrian = here("10_FinalVCF","output","cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_LargeWhite.variant_calling_summary_metrics") %>%
+    read.delim(stringsAsFactors = F, comment.char = "#", dec = ",")
+  
+  ) %>% 
+  bind_rows(.id = "breed")
+
+```
+
+# SNPs in cohort
+```{r include=TRUE}
+cohort_vcf_metrics_summary %>%
+  dplyr::select(-contains("INDEL"), -contains("INS_DEL"), -contains("MULTIALLELIC"), -FILTERED_SNPS) %>% 
+  kable(digits = 3)
+```
+
+# SNPs per breed
+```{r, include=TRUE}
+
+breed_vcf_metrics_summary %>% 
+  dplyr::select(-contains("INDEL"), -contains("INS_DEL"), -contains("MULTIALLELIC"), -FILTERED_SNPS, -SNP_REFERENCE_BIAS, NUM_SINGLETONS) %>% 
+  DT::datatable(width = '100%', options = list(scrollX = TRUE, dom = 't'), rownames = FALSE) 
+
+```
+
+# SNPs per sample
+```{r, include=TRUE}
+
+cohort_vcf_metrics_detail %>% 
+  dplyr::select(SAMPLE_ALIAS, breed, TOTAL_SNPS) %>% 
+  ggplot(data = ., aes(x = SAMPLE_ALIAS, y = TOTAL_SNPS)) +
+    geom_bar(stat = "identity") +
+    facet_grid(~breed, scales = "free_x")+
+    ylab("Number Of SNPs") +
+    xlab(NULL) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5),
+          axis.text.y = element_text(size = 10)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(10), labels = scales::scientific, expand = c(0,0)) +
+    ggtitle(label = "Number of biallelic SNPs per sample (GT filtered VCF)")
+
+```
+
+# Common and Private SNPs
+
+## Number of shared SNPs
+```{r, eval=FALSE}
+
+inner_join(
+  here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_Pietrain_chr_pos.tsv") %>% vroom(col_names = FALSE, delim = " "),
+  here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_LargeWhite_chr_pos.tsv") %>% vroom(col_names = FALSE, delim = " "),
+  by = "X1"
+  ) %>%
+  write.table(here("00_analysis/data/sosfert_common_private_snps/sosfert_common_snps_PI_LW.tab"))
+
+
+```
+
+```{r}
+
+here("00_analysis/data/sosfert_common_private_snps/sosfert_common_snps_PI_LW.tab") %>% 
+  vroom(delim = " ") %>% nrow()
+
+```
+
+
+## Number of Pietrain-private SNPs 
+```{r, eval=FALSE}
+anti_join(
+  here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_Pietrain_chr_pos.tsv") %>% vroom(col_names = FALSE, delim = " "),
+  here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_LargeWhite_chr_pos.tsv") %>% vroom(col_names = FALSE, delim = " "),
+  by = "X1"
+  ) %>%
+  write.table(here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_PI.tab"))
+
+```
+
+```{r}
+
+here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_PI.tab") %>% 
+  vroom(delim = " ") %>% nrow()
+
+```
+
+## Number of LargeWhite-private SNPs 
+```{r, eval=FALSE}
+anti_join(
+  here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_LargeWhite_chr_pos.tsv") %>% vroom(col_names = FALSE, delim = " "),
+  here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_Pietrain_chr_pos.tsv") %>% vroom(col_names = FALSE, delim = " "),
+  by = "X1"
+  ) %>%
+  write.table(here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_LW.tab"))
+
+```
+
+```{r}
+
+here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_LW.tab") %>% 
+  vroom(delim = " ") %>% nrow()
+
+```
+
+
+
+
+
+

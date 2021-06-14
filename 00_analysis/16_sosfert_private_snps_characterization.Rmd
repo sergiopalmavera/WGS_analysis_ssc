@@ -1,0 +1,44 @@
+---
+title: "SOSFERT private SNPs analysis"
+output:
+  rmdformats::robobook:
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(tidyverse)
+library(here)
+library(vroom)
+library(knitr)
+library(DT)
+library(GenomicRanges)
+```
+
+
+# Intro
+
+Characterize private SNPs by detecting overlapping genes and predicted effects.
+
+
+
+
+```{r add_annot_priv_snps_export, eval = FALSE}
+
+#here("16_SNPeff/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.ann.tab") %>%
+here("16_SNPeff/output/tst") %>%
+  vroom() %>% 
+  inner_join(
+    here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_PI.tab") %>% 
+      vroom(delim = " ") %>% 
+      separate(col = "X1", sep = " ", into = c("tmp","seqnames_start")) %>% 
+      separate(col = "seqnames_start", sep = "_", into = c("CHROM","POS")) %>% 
+      dplyr::select(CHROM, POS) %>% 
+      mutate(POS = as.double(POS)),
+    by = c("CHROM","POS")
+  ) %>% 
+  saveRDS(here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_PI_annot.tab"))
+
+```
+
