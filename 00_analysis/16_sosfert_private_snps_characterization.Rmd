@@ -12,33 +12,153 @@ library(tidyverse)
 library(here)
 library(vroom)
 library(knitr)
-library(DT)
-library(GenomicRanges)
+#library(DT)
+#library(GenomicRanges)
+library(WebGestaltR)
+```
+
+
+```{r import_annotations_private_snps}
+
+priv_snps_annot_PI <- here("16_SNPeff/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_private_PI.ann.tab") %>% vroom()
+
+priv_snps_annot_LW <- here("16_SNPeff/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_private_LW.ann.tab") %>% vroom()
 ```
 
 
 # Intro
-
 Characterize private SNPs by detecting overlapping genes and predicted effects.
 
 
+# Genomic distribution of private SNPs
 
+Private SNPs for PI and LW occur many times in each chromosome
 
-```{r add_annot_priv_snps_export, eval = FALSE}
+```{r}
+list(PI = priv_snps_annot_PI, LW = priv_snps_annot_LW) %>%
+  bind_rows(.id = "Breed") %>% 
+  mutate(CHROM = factor(CHROM, levels = c(1:18,"X"))) %>% 
+  group_by(Breed, CHROM) %>% 
+  summarise(n_snps = n()) %>% 
+  ggplot(aes(x  = CHROM, y = n_snps)) +
+    geom_bar(stat = "identity") +
+    theme_bw() +
+    scale_y_continuous(breaks = scales::pretty_breaks(5)) +
+    facet_wrap(~Breed, nrow = 2)
+```
 
-#here("16_SNPeff/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.ann.tab") %>%
-here("16_SNPeff/output/tst") %>%
-  vroom() %>% 
-  inner_join(
-    here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_PI.tab") %>% 
-      vroom(delim = " ") %>% 
-      separate(col = "X1", sep = " ", into = c("tmp","seqnames_start")) %>% 
-      separate(col = "seqnames_start", sep = "_", into = c("CHROM","POS")) %>% 
-      dplyr::select(CHROM, POS) %>% 
-      mutate(POS = as.double(POS)),
-    by = c("CHROM","POS")
-  ) %>% 
-  saveRDS(here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_PI_annot.tab"))
+Since there is a widespread distribution of private SNPs, there is not much point in analysing their corresponding genes. Instead, look for genes with non-synonimous mutations (moderate effect) and high-impact mutations.
+
+# Genes impacted by moderate and/or high impact mutations
+
+Choosing high and moderate impact SNPs leads to high number of genes for Pietrain...
+```{r}
+priv_snps_annot_PI %>% 
+  filter(`ANN[*].IMPACT` %in% c("HIGH","MODERATE")) %>% 
+  unique()
+```
+
+...and also for Large White
+```{r}
+priv_snps_annot_LW %>% 
+  filter(`ANN[*].IMPACT` %in% c("HIGH","MODERATE")) %>% 
+  unique()
+```
+
+~7K genes is way too much (~1/3 of the gene set). Then it's better to just focus in high impact variants
+
+The number of genes is now much reasonable (~300), for Pietrain:
+```{r}
+high_impact_genes_PI <- priv_snps_annot_PI %>% 
+  filter(`ANN[*].IMPACT` == "HIGH") %>% 
+  unique()
 
 ```
+
+...and for Large White
+
+```{r}
+high_impact_genes_LW <- priv_snps_annot_LW %>% 
+  filter(`ANN[*].IMPACT` == "HIGH") %>% 
+  unique()
+```
+
+Using these genes, check for significantly enriched terms.
+
+# Enrichment analysis
+```{r function_run_WebGestaltR, eval = FALSE} 
+#---------------------------
+# function_run_WebGestaltR
+#---------------------------
+
+run_WebGestaltR <- function(
+  interestGene, # vector of genes as input
+  projectName, # the suffix to which "Project_" is appended
+  enrichDatabase, # the data base to query  
+  outputDirectory # where to store the results
+  ){
+  res <- WebGestaltR(
+    enrichDatabase = enrichDatabase,
+    enrichMethod = "ORA",
+    organism = "sscrofa",
+    interestGene = interestGene,
+    interestGeneType = "ensembl_gene_id",
+    referenceSet = "genome",
+    sigMethod = "fdr",
+    fdrMethod = "BH",
+    fdrThr = 0.1,
+    topThr = 100,
+    reportNum = 20,
+    isOutput = TRUE,
+    outputDirectory = outputDirectory,
+    hostName = "http://www.webgestalt.org/",
+    projectName = projectName
+  )
+  
+  write.csv(
+    res, 
+    file.path(outputDirectory,paste0("Project_", projectName), paste0(enrichDatabase,"_sig_results.csv"))
+  )
+}
+
+```
+
+For Pietrain there were no significantly enriched terms (KEGG or GO)
+```{r run_WebGestaltR_PI, eval = FALSE} 
+run_WebGestaltR(
+  interestGene=high_impact_genes_PI$`ANN[*].GENEID`,
+  projectName="GOBP",
+  enrichDatabase="geneontology_Biological_Process",
+  outputDirectory=here("00_analysis/data/sosfert_common_private_snps/WebGestaltR_PI")
+)
+
+run_WebGestaltR(
+  interestGene=high_impact_genes_PI$`ANN[*].GENEID`,
+  projectName="KEGG",
+  enrichDatabase="pathway_KEGG",
+  outputDirectory=here("00_analysis/data/sosfert_common_private_snps/WebGestaltR_PI")
+)
+
+```
+
+
+Also for Large White there were no significantly enriched terms (KEGG or GO)
+```{r run_WebGestaltR_LW, eval = FALSE} 
+run_WebGestaltR(
+  interestGene=high_impact_genes_LW$`ANN[*].GENEID`,
+  projectName="GOBP",
+  enrichDatabase="geneontology_Biological_Process",
+  outputDirectory=here("00_analysis/data/sosfert_common_private_snps/WebGestaltR_LW")
+)
+
+run_WebGestaltR(
+  interestGene=high_impact_genes_LW$`ANN[*].GENEID`,
+  projectName="KEGG",
+  enrichDatabase="pathway_KEGG",
+  outputDirectory=here("00_analysis/data/sosfert_common_private_snps/WebGestaltR_LW")
+)
+
+```
+
+
 

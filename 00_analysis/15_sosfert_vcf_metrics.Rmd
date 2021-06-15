@@ -109,14 +109,17 @@ anti_join(
   here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_LargeWhite_chr_pos.tsv") %>% vroom(col_names = FALSE, delim = " "),
   by = "X1"
   ) %>%
-  write.table(here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_PI.tab"))
+  separate(col = "X1",into = c("tmp1","tmp2"), sep = "_") %>% #
+  mutate(tmp3 = paste0(tmp1,":",tmp2,"-",tmp2)) %>% #
+  dplyr::select(tmp3) %>% #
+  write.table(here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_PI.intervals"), quote = FALSE, row.names = FALSE, col.names = FALSE)
 
 ```
 
 ```{r}
 
-here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_PI.tab") %>% 
-  vroom(delim = " ") %>% nrow()
+here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_PI.intervals") %>% 
+  vroom(delim = " ", col_names = FALSE) %>% nrow()
 
 ```
 
@@ -127,14 +130,16 @@ anti_join(
   here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_Pietrain_chr_pos.tsv") %>% vroom(col_names = FALSE, delim = " "),
   by = "X1"
   ) %>%
-  write.table(here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_LW.tab"))
-
+  separate(col = "X1",into = c("tmp1","tmp2"), sep = "_") %>% #
+  mutate(tmp3 = paste0(tmp1,":",tmp2,"-",tmp2)) %>% #
+  dplyr::select(tmp3) %>% #
+  write.table(here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_LW.intervals"), quote = FALSE, row.names = FALSE, col.names = FALSE)
 ```
 
 ```{r}
 
-here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_LW.tab") %>% 
-  vroom(delim = " ") %>% nrow()
+here("00_analysis/data/sosfert_common_private_snps/sosfert_private_snps_LW.intervals") %>% 
+  vroom(delim = " ", col_names = FALSE) %>% nrow()
 
 ```
 
