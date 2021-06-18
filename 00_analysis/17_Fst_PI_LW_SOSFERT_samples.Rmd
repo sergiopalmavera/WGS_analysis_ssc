@@ -57,6 +57,14 @@ ssc_gene_set_with_descr <- readRDS(here("ref_ensemble95/gene_set/ssc_gene_set_wi
 
 ```
 
+```{r biomart_Setup, eval=FALSE}
+library(biomaRt)
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "sscrofa_gene_ensembl", version = 95)
+
+```
+
+
 # Summary
 
 Genomic mean differentiation is 0.15. 99th quantile windows have an Fst >= 0.59, but still this is not very extreme (zFst = 3.26). None of the windows have an Fst = 1
@@ -297,6 +305,117 @@ run_WebGestaltR(
 
 ```
 
+# Gene annotations (GOBP, KEGG)
+```{r add_gobp_to_outlier_genes, eval = FALSE}
+
+#listAttributes(ensembl) %>% View()
+
+genes_outliers_gobp <- getBM(attributes = c("ensembl_gene_id", "go_id", "name_1006", "namespace_1003"), 
+                             filters = "ensembl_gene_id", 
+                             values = unique(genes_outliers$gene_id), 
+                             mart = ensembl)
+
+genes_outliers_gobp <- full_join(
+  genes_outliers %>% as_tibble() %>% dplyr::select(gene_name, gene_id, gene_biotype),
+  genes_outliers_gobp %>% as_tibble() %>% filter(namespace_1003 == "biological_process"),
+  by = c("gene_id"="ensembl_gene_id")
+  ) %>% 
+  dplyr::rename(go_name = name_1006, go_type = namespace_1003)
+  
+```
+
+```{r add_KEGG_to_outlier_genes, eval = FALSE}
+library(KEGGREST) #BiocManager::install("KEGGREST")
+
+# convert ensembl ids to entrez ids
+ensembl_to_entrez <- getBM(attributes = c("ensembl_gene_id", "entrezgene"),#"kegg_enzyme"),
+                           filters = "ensembl_gene_id", 
+                           values = unique(genes_outliers$gene_id),
+                           mart = ensembl) 
+
+ensembl_to_entrez <- ensembl_to_entrez %>% 
+  filter(!is.na(entrezgene)) %>% 
+  mutate(ssc_entrezgene_id = paste0("ssc:",entrezgene))
+
+# genes to query
+tmp <- unique(ensembl_to_entrez$ssc_entrezgene_id) #values: gene ensembl ids
+
+# indixes to split data
+# only 10 genes at a time are allowed
+length(tmp)
+query_df <- data.frame(start = seq(1, length(tmp), 10)) %>% mutate(end = start + 9)
+head(query_df)
+tail(query_df)
+
+
+# query in batches of max 10 genes
+KEGGs <- lapply(1:nrow(query_df), function(i){
+  
+  print(i)
+  query_genes <- tmp[query_df$start[i]:query_df$end[i]]
+  kegg_res <- keggGet(query_genes) %>% 
+    lapply(function(x){ 
+      data.frame(pathway_id = names(x$PATHWAY) , pathway = x$PATHWAY ) %>% 
+        mutate(entrez_gene = x$ENTRY %>% as.integer()) %>% 
+        dplyr::select(entrez_gene, everything())
+      }) %>% 
+    bind_rows()
+  
+  if(nrow(kegg_res) == 0){
+    print("Neither gene matched KEGG terms")
+  }else{
+    kegg_res %>% 
+      inner_join(ensembl_to_entrez, by = c("entrez_gene"="entrezgene")) 
+  }
+  }) 
+
+
+genes_outliers_kegg <- KEGGs %>% 
+  bind_rows() %>% 
+  unique() %>% 
+  as_tibble() %>% 
+  dplyr::select(-ssc_entrezgene_id)
+```
+
+```{r combine_annotations_and_export, eval = FALSE}
+genes_outliers_gobp_kegg <- full_join(genes_outliers_gobp, 
+                                      genes_outliers_kegg, 
+                                      by = c("gene_id"="ensembl_gene_id")) %>% 
+  dplyr::select(gene_name, gene_id, entrez_gene, everything())
+
+genes_outliers_gobp_kegg %>% 
+  write.csv(here("00_analysis/data/SOSFERT_samples_FST_analysis_genes_outliers_gobp_kegg.csv"))
+```
+
+```{r import_gene_annotations, include=FALSE}
+
+genes_outliers_gobp_kegg <- here("00_analysis/data/SOSFERT_samples_FST_analysis_genes_outliers_gobp_kegg.csv") %>% 
+  read.csv() %>% 
+  as_tibble() %>% 
+  dplyr::select(-X)
+
+genes_outliers_gobp_kegg
+```
+
+```{r combine_annotations_by_gene}
+genes_outliers_gobp_kegg %>% 
+  mutate(gene = ifelse(is.na(gene_name), gene_id, gene_name)) %>% 
+  # add gene descriptions
+  inner_join(
+    ssc_gene_set_with_descr %>% 
+      dplyr::select(gene_id, description), 
+    by = "gene_id"
+    ) %>% 
+  # group by gene
+  group_by(gene) %>% 
+  summarise(gene_description = unique(description),
+            GOBP = paste(unique(go_name), collapse = " / "),
+            KEGG = paste(unique(pathway), collapse = " / ")) %>% 
+  as_tibble() %>% 
+  DT::datatable(rownames = FALSE)
+```
+
+
 # QTLs in outlier regions
 
 Outliers were overlapped with QTLs.
@@ -417,7 +536,6 @@ genes_in_outliers_in_qtl_meat %>%
   dplyr::select(gene, gene_id, description) %>% 
   DT::datatable(rownames = FALSE)
 ```
-
 
 ```{r}
 genes_in_outliers_in_qtl_meat %>% 

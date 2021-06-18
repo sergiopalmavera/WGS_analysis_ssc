@@ -1,0 +1,87 @@
+---
+title: "Intersection between (RDD genes DU mouse) x (Fst Outliers genes SOSFERT pig)"
+output: 
+  html_document:
+    toc: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(tidyverse)
+library(here)
+library(vroom)
+```
+
+```{r import_ssc_outlier_genes}
+
+ssc_outlier_genes <- here("00_analysis/data", "SOSFERT_samples_FST_analysis_genes_outliers_gobp_kegg.csv") %>% vroom()
+
+```
+
+
+```{r transform_ssc_to_mmu_ids, include=FALSE, eval = FALSE}
+library(biomaRt)
+ensembl <- useEnsembl(biomart = "genes", dataset = "sscrofa_gene_ensembl", version = 95)
+
+listAttributes(ensembl) %>% View()
+
+vals <- ssc_outlier_genes$gene_id %>% unique()
+
+vals %>% length() #88
+
+ssc_outlier_genes_to_mmu <- getBM(attributes = c("ensembl_gene_id", "mmusculus_homolog_ensembl_gene"), 
+                                  filters = "ensembl_gene_id", 
+                                  values = vals, mart = ensembl)
+
+
+ssc_outlier_genes_to_mmu$ensembl_gene_id %>% unique() %>% length() #88
+
+
+ssc_outlier_genes_to_mmu %>% write.csv(here("00_analysis/data", "SOSFERT_samples_FST_analysis_genes_outliers_ssc_to_mmu.csv"))
+
+```
+
+```{r import_ssc_to_mmu_ids}
+
+ssc_outlier_genes_to_mmu <- here("00_analysis/data", "SOSFERT_samples_FST_analysis_genes_outliers_ssc_to_mmu.csv") %>% vroom()
+
+```
+
+# Overlap ssc Fst outlier genes and RDD mmu genes (q10_q95, as in initial DUmmu manuscript) 
+
+There were no overalps here
+
+```{r overlaps_with_RDD_DU_genes, include=TRUE}
+
+lapply(c("DUK","DUC","DU6","DU6P","DUhLB"), function(du_line){
+  
+  # import DU RDD genes
+  paste0(
+    "C:/Users/palma-vera/BackUpWork/03_SAW/LinuX/projekte_I2-SOS-FERT/GitHub/WGS_analysis_mmu/00_dashboard/data/RDD_genes/RDD_genes_",
+    du_line,
+    ".csv"
+    ) %>% 
+    vroom() %>% 
+    # inner join with ssc outliers fst
+    inner_join(ssc_outlier_genes_to_mmu, c("ensembl_gene_id" = "mmusculus_homolog_ensembl_gene"))
+  
+})
+
+```
+
+
+# Overlap with most linient RDD gene list (q25_q75)
+
+Only 4 hits were found, all for DU6
+```{r overlaps_with_RDD_DU_genes_q25_q75, include=TRUE}
+
+vroom(
+  "C:/Users/palma-vera/BackUpWork/03_SAW/LinuX/projekte_I2-SOS-FERT/GitHub/WGS_analysis_mmu/00_dashboard/data/WebGestaltR_RDD_q25_q75/rdd_genes_q25_q75.csv"
+  ) %>% 
+  # inner join with ssc outliers fst
+  inner_join(ssc_outlier_genes_to_mmu, c("mcols.gene_id" = "mmusculus_homolog_ensembl_gene")) %>% 
+  knitr::kable()
+
+```
+
