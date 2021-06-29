@@ -1,0 +1,91 @@
+---
+title: "Genetic Structure - SOSFERT samples"
+output: 
+  html_document:
+    toc: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(here)
+library(vroom)
+library(ape)
+```
+
+```{r}
+
+sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv"))
+
+```
+
+# Principal Component Analysis
+```{r}
+
+pc_pct <- here("11_genetic_str/output/pc_pct_SOSFERTsamples.csv") %>% read.csv()
+
+pc_eigenscores <- here("11_genetic_str/output/pc_eigenscores_SOSFERTsamples.csv") %>% 
+  read.csv() %>% 
+  inner_join(sample_info, by = c("sample.id"="sample_id"))
+
+```
+
+### Scree Plot 
+```{r, fig.height=5, fig.width=5} 
+pc_pct %>% 
+  ggplot(aes(x=PC,y=varprop)) +
+    geom_bar(stat = "identity") +
+    xlab("Principal Component") +
+    ylab("% Variance") +
+    scale_x_continuous(breaks = 1:7) +
+    theme_bw()
+```
+
+### PCA plots colored by breed
+```{r, fig.height=5, fig.width=8}
+pc_eigenscores %>% 
+  ggplot(data = ., aes(x=PC1,y=PC2,color=breed)) +
+    geom_point() +
+    theme_bw(base_size = 12) +
+    theme(legend.title = element_blank())
+```
+
+# Hierarchical Clustering
+
+
+```{r prepare_dendrogram_data, include=FALSE}
+dend <- readRDS(here("11_genetic_str/output/dendrogram_full_snp_set_SOSFERTsamples.rds")) %>% as.hclust()
+
+# change labels to group to avoid legend, re-order labels
+sample_info_hc_sorted <- sample_info[match(dend[["labels"]], sample_info$sample_id),]
+identical(sample_info_hc_sorted$sample_id, dend[["labels"]]) #check order of labels is the same! yes!
+
+dend[["labels"]] <- sample_info_hc_sorted$breed
+```
+
+```{r} 
+# colors based on palette Dark2 used later for admixture
+#colrs <- c("#7570B3","#66A61E", "#1B9E77", "#D95F02", "#E7298A")
+colrs <- c("#7570B3","#E7298A")
+names(colrs) <- sample_info_hc_sorted$breed %>% unique()
+
+# make 5 clusters
+clus5 <- cutree(dend, 5)
+
+# add colors by cluster, matching line with corresponding color
+colrs_tip <- colrs[names(clus5)]
+
+# Shorten label
+dend[["labels"]][dend[["labels"]] == "Pietrain"] <- "PI"
+dend[["labels"]][dend[["labels"]] == "Large White"] <- "LW"
+
+plot(as.phylo(dend), 
+     type = "fan", 
+     cex = 0.6,
+     no.margin = FALSE,
+     tip.color = colrs_tip)
+
+# good reference: http://www.sthda.com/english/wiki/beautiful-dendrogram-visualizations-in-r-5-must-known-methods-unsupervised-machine-learning
+
+```
