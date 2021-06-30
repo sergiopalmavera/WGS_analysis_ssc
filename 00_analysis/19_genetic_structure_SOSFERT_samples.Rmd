@@ -12,6 +12,7 @@ library(tidyverse)
 library(here)
 library(vroom)
 library(ape)
+library(ggpubr)
 ```
 
 ```{r}
@@ -20,7 +21,17 @@ sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv"))
 
 ```
 
+# Intro
+
+Genetic structure of animals sequenced at high depth (~50x) as part of the original conception of the SOSFERT project were analysed to characterize the genetic structure in the combined population of Large White and Pietrain.
+
+For this, the whole SNP was used (~16M) to compute principal component analysis, hierarchical clustering and admixture. The results can be seen below. 
+
+
 # Principal Component Analysis
+
+Detection of clusters of animals using.
+
 ```{r}
 
 pc_pct <- here("11_genetic_str/output/pc_pct_SOSFERTsamples.csv") %>% read.csv()
@@ -32,6 +43,9 @@ pc_eigenscores <- here("11_genetic_str/output/pc_eigenscores_SOSFERTsamples.csv"
 ```
 
 ### Scree Plot 
+
+The scree plot shows that most of the variance is found in the first principal component.
+
 ```{r, fig.height=5, fig.width=5} 
 pc_pct %>% 
   ggplot(aes(x=PC,y=varprop)) +
@@ -43,6 +57,9 @@ pc_pct %>%
 ```
 
 ### PCA plots colored by breed
+
+The scatter plot of eigen scores shows a clear separation between pietrain and large-white samples.
+
 ```{r, fig.height=5, fig.width=8}
 pc_eigenscores %>% 
   ggplot(data = ., aes(x=PC1,y=PC2,color=breed)) +
@@ -53,6 +70,7 @@ pc_eigenscores %>%
 
 # Hierarchical Clustering
 
+Hierarchical clustering was computed based on the genetic similarity of samples (identity by state). As the PCA, HC also distinguishes two clear populations.
 
 ```{r prepare_dendrogram_data, include=FALSE}
 dend <- readRDS(here("11_genetic_str/output/dendrogram_full_snp_set_SOSFERTsamples.rds")) %>% as.hclust()
@@ -88,4 +106,67 @@ plot(as.phylo(dend),
 
 # good reference: http://www.sthda.com/english/wiki/beautiful-dendrogram-visualizations-in-r-5-must-known-methods-unsupervised-machine-learning
 
+```
+
+
+# ADMIXTURE
+
+Admixture analysis shows that if two past populations are considered, there is no evidence of admixture in the present. 
+
+More than three populations shows (K=3 - K=6) substructures in each breed, but no admixture.
+
+```{r import_fam_info}
+# About sample ordering: https://www.biostars.org/p/221817/
+
+fam_fl <- read.table(here("11_genetic_str/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.fam"))
+```
+
+```{r make_ancestry_barplot_function}
+make_ancestry_barplot <- function(k){
+
+#k=2
+  
+  q_fl=here(paste0("11_genetic_str/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.",k,".Q"))
+  
+  k_dat <- read.table(q_fl) %>% 
+    bind_cols(
+      dplyr::select(fam_fl, V2) %>% dplyr::rename(sample_id = V2)
+      ) %>% 
+    left_join(sample_info, by = "sample_id") %>% 
+    reshape2::melt(id.vars = c("sample_id","breed","project")) %>% 
+    mutate(breed = factor(breed, levels = c("Large White", "Pietrain"))) %>% 
+    arrange(breed, sample_id)
+  
+  k_dat %>% 
+    ggplot(aes(x = sample_id, y = value,fill = variable)) +
+    geom_bar(stat = "identity", position = "stack", width = 1) +
+    theme_bw(base_size = 12) +
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+      legend.position = "none",
+      plot.title = element_text(hjust = 0.5)
+    ) +
+    xlab(NULL) +
+    ylab("Ancestry Fraction") +
+    ggtitle(paste0("K=",k)) +
+    scale_y_continuous(expand = c(0.005,0.005), breaks = seq(0,1,0.2)) +
+    scale_fill_brewer(palette = "Dark2") +
+    facet_grid(~breed, scales = "free") +
+    theme(panel.spacing = unit(1/15, "lines"),
+          strip.background = element_blank(), 
+          panel.border = element_blank(),
+          panel.grid = element_blank(),
+          axis.text.x = element_blank()) 
+  }
+
+```
+
+### Ancestry fraction (k2 - k6)
+```{r, fig.height=10, fig.width=7}
+ggarrange(make_ancestry_barplot(2),
+          make_ancestry_barplot(3),
+          make_ancestry_barplot(4), 
+          make_ancestry_barplot(5), 
+          make_ancestry_barplot(6),
+          ncol = 1, nrow = 5)
 ```
