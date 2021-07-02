@@ -448,10 +448,53 @@ qtl_set <- readRDS(here("pigQTL/qtl_set.rds"))
 
 qtl_set %>% 
   as.data.frame() %>% 
-  group_by(qtl_class) %>% 
-  summarise(n())
+  group_by(qtl_class, seqnames) %>% 
+  summarise(n=n()) %>% 
+  ungroup() %>% 
+  reshape2::dcast(qtl_class ~ seqnames, value.var = "n") %>% 
+  knitr::kable()
 
 ```
+
+Some QTLs correspond to very large intervals
+```{r}
+
+qtl_set %>% 
+  width() %>% 
+  as_tibble() %>% 
+  ggplot(aes(x = value)) +
+    geom_histogram() +
+    theme_bw() +
+    scale_x_continuous(breaks = scales::pretty_breaks(10)) 
+```
+
+But almost all intervals are short (Zooming in the most frequent interval width):
+```{r}
+qtl_set %>% 
+  width() %>% 
+  as_tibble() %>% 
+  filter(value < 5e2) %>% 
+  ggplot(aes(x = value)) +
+    geom_histogram() +
+    theme_bw() +
+    scale_x_continuous(breaks = scales::pretty_breaks(10)) 
+
+```
+
+Check where those "short-most-frequent" QTLs occur
+```{r}
+qtl_set %>% 
+  as_tibble() %>% 
+  filter(width < 5e2) %>% 
+  group_by(qtl_class, seqnames) %>% 
+  summarise(n=n()) %>% 
+  ungroup() %>% 
+  reshape2::dcast(qtl_class ~ seqnames, value.var = "n") %>% 
+  knitr::kable()
+ 
+  
+```
+
 
 
 ### Number of QTLs overlapping outlier regions 
