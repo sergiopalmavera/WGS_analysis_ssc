@@ -49,6 +49,60 @@ list(PI = priv_snps_annot_PI, LW = priv_snps_annot_LW) %>%
 
 Since there is a widespread distribution of private SNPs, there is not much point in analysing their corresponding genes. Instead, look for genes with non-synonimous mutations (moderate effect) and high-impact mutations.
 
+This appears to be proportional to the chromosome length.
+```{r}
+
+list(PI = priv_snps_annot_PI, LW = priv_snps_annot_LW) %>%
+  bind_rows(.id = "Breed") %>% 
+  mutate(CHROM = factor(CHROM, levels = c(1:18,"X"))) %>% 
+  group_by(Breed, CHROM) %>% 
+  summarise(n_snps = n()) %>% 
+  dplyr::rename(facet = Breed, vals = n_snps) %>% 
+  bind_rows(
+    here("ref_ensemble95","Sus_scrofa.Sscrofa11.1.dna.toplevel.fa.fai") %>% 
+      vroom(col_names = FALSE) %>% 
+      dplyr::rename(CHROM = X1, vals = X2) %>% 
+      mutate(facet = "chr_length") %>% 
+      dplyr::select(facet, CHROM, vals) %>% 
+      filter(CHROM %in% c(1:18, "X"))) %>% 
+  mutate(facet = factor(facet, levels = c("chr_length","PI","LW")),
+         CHROM = factor(CHROM, levels = c("X", 18:1))) %>% 
+  ggplot(aes(x  = CHROM, y = vals)) +
+    geom_bar(stat = "identity") +
+    theme_bw() +
+    scale_y_continuous(breaks = scales::pretty_breaks(5)) +
+    facet_wrap(~facet, ncol = 3, scales = "free") +
+    coord_flip() +
+    xlab(NULL)
+  
+```
+
+
+# Number of SNPs per impact category
+
+Pietrain
+```{r}
+priv_snps_annot_PI %>% 
+  dplyr::select(CHROM, POS, `ANN[*].IMPACT`) %>% 
+  unique() %>% 
+  group_by(`ANN[*].IMPACT`) %>% 
+  summarise(n_snps = n()) %>% 
+  mutate(`ANN[*].IMPACT` = factor(`ANN[*].IMPACT`, levels = c("HIGH","MODERATE", "LOW", "MODIFIER"))) %>% 
+  kable()
+```
+
+Large White
+```{r}
+priv_snps_annot_LW %>% 
+  dplyr::select(CHROM, POS, `ANN[*].IMPACT`) %>% 
+  unique() %>% 
+  group_by(`ANN[*].IMPACT`) %>% 
+  summarise(n_snps = n()) %>% 
+  mutate(`ANN[*].IMPACT` = factor(`ANN[*].IMPACT`, levels = c("HIGH","MODERATE", "LOW", "MODIFIER"))) %>% 
+  kable()
+```
+
+
 # Genes impacted by moderate and/or high impact mutations
 
 Choosing high and moderate impact SNPs leads to high number of genes for Pietrain...
@@ -73,6 +127,7 @@ high_impact_genes_PI <- priv_snps_annot_PI %>%
   filter(`ANN[*].IMPACT` == "HIGH") %>% 
   unique()
 
+high_impact_genes_PI
 ```
 
 ...and for Large White
@@ -81,6 +136,8 @@ high_impact_genes_PI <- priv_snps_annot_PI %>%
 high_impact_genes_LW <- priv_snps_annot_LW %>% 
   filter(`ANN[*].IMPACT` == "HIGH") %>% 
   unique()
+
+high_impact_genes_LW
 ```
 
 Using these genes, check for significantly enriched terms.
