@@ -435,6 +435,117 @@ genes_outliers_gobp_kegg %>%
   DT::datatable(rownames = FALSE)
 ```
 
+# Genes of interest
+
+After assessing gene ontology terms and KEGG pathways. The following set of genes is further characterized:
+
+- ANKRD2: skeletal muscl tissue development (GOBP)
+
+- CTSD: Estrogen signaling pathway (KEGG)
+
+- IGF2: GOBPs related to muscle and reproduction.
+
+- INS: KEGG includes "occyte meiosis", "ovarian steroidogenesis", "progesterone mediated oocyte maturation", "prolactin signalling pathway"; also KEGG for muscle "mTOR signaling pathway".
+
+- PAPPA2: "Bone morphogenesis" (GOBP). It could be relevant for different is sizes/length between breeds (is there any??...need to check)
+
+- PXT1: "peroxisomal testis enriched protein 1" (gene description)
+
+- Genes involved in Wnt signaling, which a pathway involved in reproduction (i.e. folliculogenesis): FRAT1, FRAT2, SFRP5, TLE4
+
+- TH: KEGG "prolactin signaling pathway"
+
+- TNNI2 & TNN3: GOBP "skeletal muscle contraction"
+
+More details are shown in the following table:
+
+```{r}
+
+genes_outliers_gobp_kegg_GOIs <- genes_outliers_gobp_kegg %>% 
+  mutate(gene = ifelse(is.na(gene_name), gene_id, gene_name)) %>% 
+  filter(
+    gene %in% c("ANKRD2", "CTSD", "ENSSSCG00000035293", "INS", "PAPPA2", "PXT1", "FRAT1", "FRAT2", "SFRP5","TLE4", "TH", "TNNI2", "TNNT3")
+    ) %>% 
+  # add gene descriptions
+  inner_join(
+    ssc_gene_set_with_descr %>% 
+      dplyr::select(seqnames, start, end, gene_id, description), 
+    by = "gene_id"
+    ) %>% 
+  # group by gene
+  group_by(seqnames, start, end, gene_id, gene) %>% 
+  summarise(gene_description = unique(description),
+            GOBP = paste(unique(go_name), collapse = " / "),
+            KEGG = paste(unique(pathway), collapse = " / ")) %>% 
+  as_tibble() %>% 
+  arrange(seqnames, start, end) %>% 
+  # locus col to make it nicer to display
+  tidyr::unite("tmp", seqnames, start, sep = ":") %>% 
+  tidyr::unite("gene_locus", tmp, end, sep = "-")   
+```
+
+```{r}
+genes_outliers_gobp_kegg_GOIs %>% DT::datatable(rownames = FALSE)
+```
+
+
+### SNPeff predicted consequences
+
+Checking for genes of interest carrying mutations that can affect the aminoacid chain sequence or gene splicing (HIGH/MODERATE SNPs). Also, the allele frequency of the mutations is shown in both breeds as well as the Fst.
+
+The HIGH/MODERATE SNPs are mostly well differentiated between Pietrain and Large White. 
+
+For the genes located in chr2, all the alternative alleles are fixed in Pietrain affecting the genes CTSD, TNNI2, TNNT3, which makes sense, as they are genes relevant for muscle function (except for CTSD). 
+
+Other alleles well differentiated in favor to Pietrain affect ANKRD2, FRAT1, FRAT2. ANKRD2 is also relevant for muscle function, but since FRAT1 and FRAT2 are part of Wnt signaling pathway, I would have expected them to be affected by highly differentiated mutations occuring in Large White.
+
+IGF1 (ENSSSCG00000035293) is affected by SNP that is almost fixed in LW and not found in PI, which is interesting as IGF1 causes muscle growth but it is also involved in fertility.
+
+Finally, SFRP5 is affected by two missense mutation found only in LW (AF = 0.6). This is gene is part of wnt signaling.
+
+```{r add_SNPeff_data}
+
+genes_outliers_gobp_kegg_GOIs %>% 
+  inner_join(
+    here("16_SNPeff/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.ann.tab") %>% 
+      vroom(),
+    by=c("gene_id"="ANN[*].GENEID")
+  ) %>% 
+  as_tibble() %>% 
+  dplyr::select(CHROM, POS, REF, ALT, `ANN[*].EFFECT`, `ANN[*].IMPACT`, gene_id, gene, gene_description) %>% 
+  filter(!(`ANN[*].IMPACT` %in% c("MODIFIER", "LOW"))) %>%
+  unique() %>% 
+  # add alt allele frq PI
+  inner_join(
+    here("14_allele_frequencies/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_Pietrain_all_sites.frq2") %>% 
+      vroom() %>% 
+      dplyr::select(CHROM, POS, ALT_frq) %>% 
+      dplyr::rename(ALT_frq_PI=ALT_frq),
+    by = c("CHROM", "POS")
+  ) %>% 
+  # add alt allele frq LW
+  inner_join(
+    here("14_allele_frequencies/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_LargeWhite_all_sites.frq2") %>% 
+      vroom() %>% 
+      dplyr::select(CHROM, POS, ALT_frq) %>% 
+      dplyr::rename(ALT_frq_LW=ALT_frq),
+    by = c("CHROM", "POS")
+  ) %>% 
+  # add Fst information
+  inner_join(
+    here("13_Fst/output/fst_win_SOSFERT_PT_vs_LW.weir.fst") %>% 
+      vroom(),
+    by = c("CHROM", "POS")
+  ) %>% 
+  DT::datatable(rownames = FALSE)
+```
+
+
+
+
+
+
+
 
 # QTLs in outlier regions
 
