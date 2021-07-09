@@ -1,0 +1,46 @@
+---
+title: "Fst analysis - PI vs LW - comparisson SOS & External samples"
+output: 
+  html_document:
+    toc: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE, warning = FALSE)
+
+library(here)
+library(vroom)
+library(dplyr)
+library(stringr)
+library(knitr)
+library(ggpubr)
+library(GenomicRanges)
+library(WebGestaltR)
+```
+
+# Intro
+
+This analysis compares the genes obtained though outlier analysis using:
+
+- SOSFERT samples: Large White (n=10), Pietrain (n=10). High coverage.
+
+- External data: Large White (n=14), Pietrain (n=13). High coverage.
+
+```{r import_outlier_genes}
+genes_outliers_Fst_PI_LW_sosfert_samples <- readRDS(here("00_analysis/data/genes_outliers_Fst_PI_LW_sosfert_samples.rds")) #analysis 17_Fst_...
+
+genes_outliers_Fst_PI_LW_external_samples <- readRDS(here("00_analysis/data/genes_outliers_Fst_PI_LW_external_samples.rds")) # analysis 20_Fst_...
+```
+
+# Common genes between both
+
+```{r}
+inner_join(
+  genes_outliers_Fst_PI_LW_sosfert_samples %>% as_tibble(),
+  genes_outliers_Fst_PI_LW_external_samples %>% as_tibble(),
+  by = "gene_id"
+)
+```
+
+
+

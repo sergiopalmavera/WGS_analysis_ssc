@@ -252,6 +252,12 @@ genes_outliers <- subsetByOverlaps(ssc_gene_set, outliers, maxgap = 50000)
 
 ```
 
+```{r save_list_for_comparison_with_SOSFERT}
+
+genes_outliers %>% saveRDS(here("00_analysis/data/genes_outliers_Fst_PI_LW_SOSFERT_samples.rds"))
+```
+
+
 There are `r  genes_outliers %>% length()` genes in outlier regions.
 
 ### Genes in outlier regions 
