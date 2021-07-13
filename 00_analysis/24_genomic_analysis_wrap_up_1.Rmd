@@ -1,0 +1,826 @@
+---
+title: "Genome analysis wrap up"
+output: 
+  html_document:
+    toc: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE, warning = FALSE)
+
+library(dplyr)
+library(ggplot2)
+library(vroom)
+library(stringr)
+library(here)
+library(ape)
+library(ggpubr)
+library(knitr)
+library(GenomicRanges)
+```
+
+
+```{r gene_set} 
+
+ssc_gene_set <- readRDS(here("ref_ensemble95/gene_set/ssc_gene_set.rds"))
+
+```
+
+# Introduction
+
+This documents summarises the results obtained from analyzing genomic data produced for the SOSFERT project and from other publications.
+
+The aim is to identify genomic regions associated to fertility and muscle mass.
+
+As part of the SOSFERT project, two pig-breeds were sequenced at ~50x: Pietrain (n=10) and Large-White (n=10).
+
+Since the number of animals in the SOSFERT sample set is too low, more data was brought in from external sources (published results) and also from other breeds. This external data had lower coverage (~10x).
+
+The new breeds that were added besides Pietrain and Large-White were Duroc and Landrace. The rationale behind this was to have breeds used for similar purposes (breeds used as dam lines: Large-White and Landrace; breeds used as sire lines: Pietrain and Duroc).
+
+Breeds used as sires are characterized for having higher muscularity and dams, for their higher prolifically.
+
+European wild boars were included. Originally, the idea was to use them as representatives of the funder population. But apparently they are not suitable for that purpose (i.e. commercial breeds are not derived from wild boards only).
+
+Here's a summary of how the data is distributed among projects and breeds:
+
+```{r sample_info}
+sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv")) %>% 
+  # fix sample id
+  mutate(sample_id2 = str_split(sample_id, "_") %>% sapply(function(x) x[1]))
+
+```
+
+```{r}
+sample_info %>% 
+  group_by(breed, project) %>% 
+  summarise(n = n()) %>% 
+  reshape2::dcast(project ~ breed, value.var = "n") %>% 
+  janitor::adorn_totals(where = c("row","col")) %>% 
+  kable()
+```
+
+# Sequencing coverage
+
+Sequencing coverage after alignment and removal of reads with lower than 20 mapping quality and bases below 20 base quality.
+
+```{r}
+
+internal_CollectWgsMetrics_q20mq20 <- list.files(here("05_BAM_prep_to_HC/output"), pattern = ".dedup.CollectWgsMetrics_q20mq20.txt", full.names = TRUE) %>% 
+  lapply(function(fl){
+    # extract sample name
+    samp <- fl %>% basename() %>% str_split("[.]") %>% sapply(function(x) x[1])
+    
+    # read data in and add sample name
+    d <- read.table(fl, header = TRUE, dec = ",", comment.char = "#",nrows = 1) %>% 
+      mutate(sample_id = samp) %>% 
+      dplyr::select(sample_id, everything())
+  }) %>% 
+  bind_rows() %>% 
+  mutate(data_set = "internal_q20mq20") %>% 
+  dplyr::select(data_set, everything()) %>% 
+  as_tibble()
+
+
+external_CollectWgsMetrics_q20mq20 <- list.files(here("06_external_data/output/FINAL"), pattern = ".dedup.CollectWgsMetrics_q20mq20.txt", full.names = TRUE) %>% 
+  lapply(function(fl){
+    # extract sample name
+    samp <- fl %>% basename() %>% str_split("[.]") %>% sapply(function(x) x[1])
+    
+    # read data in and add sample name
+    d <- read.table(fl, header = TRUE, dec = ",", comment.char = "#",nrows = 1) %>% 
+      mutate(sample_id = samp) %>% 
+      dplyr::select(sample_id, everything())
+  }) %>% 
+  bind_rows() %>% 
+  mutate(data_set = "external_q20mq20") %>% 
+  dplyr::select(data_set, everything()) %>% 
+  as_tibble()
+
+full_CollectWgsMetrics_data <- bind_rows(
+  internal_CollectWgsMetrics_q20mq20,
+  external_CollectWgsMetrics_q20mq20,
+  ) %>% 
+  # fix sample id
+  mutate(sample_id2 = str_split(sample_id, "_") %>% sapply(function(x) x[1])) %>% 
+  inner_join(sample_info, by = "sample_id2") %>% 
+  mutate(data_set = factor(data_set, levels = c("internal_q20mq20","external_q20mq20")),
+         breed = factor(breed, levels = c("Large White","Pietrain", "Landrace", "Duroc","European Wild Boar"))) 
+
+full_CollectWgsMetrics_data %>% 
+  group_by(breed, data_set) %>% 
+  summarise(n = n(), mean_cvg = mean(MEAN_COVERAGE), sd_cvg = sd(MEAN_COVERAGE), min = min(MEAN_COVERAGE), max = max(MEAN_COVERAGE)) %>%
+  arrange(breed, data_set) %>% 
+  dplyr::select(-data_set) %>% 
+  knitr::kable(digits = 2)
+
+```
+
+SOSFERT samples (internal) have a much larger coverage.
+
+```{r vis_cvg_by_sample_hor,  fig.height = 5, fig.width = 10}
+
+full_CollectWgsMetrics_data %>% 
+  ggplot(aes(x = sample_id2, y = MEAN_COVERAGE, fill = data_set)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    theme_bw(base_size = 12) +
+    scale_fill_brewer(palette = "Dark2") +
+    scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 20)) +
+    facet_wrap(~breed, nrow = 1, scales = "free_x") +
+    xlab(NULL) +
+    theme(axis.text.x = element_blank(),
+          legend.position = "bottom",
+          legend.title = element_blank()) +
+    ggtitle(label = "Mean Coverage BAMs before BQSR")
+
+```
+
+Insert sizes are slightly different but nothing to worry about.
+
+```{r import_insert_size_data}
+
+internal_CollectInsertSizeMetrics <- list.files(here("05_BAM_prep_to_HC/output"), pattern = ".dedup.CollectInsertSizeMetrics.tab", full.names = TRUE) %>% 
+  lapply(function(fl){
+    # extract sample name
+    samp <- fl %>% basename() %>% str_split("[.]") %>% sapply(function(x) x[1])
+    
+    # read data in and add sample name
+    d <- read.table(fl, header = TRUE, dec = ",", skip = 6,nrows = 1, sep = "\t") %>% 
+      mutate(sample_id = samp) %>% 
+      dplyr::select(sample_id, everything())
+  }) %>% 
+  bind_rows() %>% 
+  mutate(data_set = "internal") %>% 
+  dplyr::select(data_set, everything()) %>% 
+  as_tibble() 
+
+
+
+external_CollectInsertSizeMetrics <- list.files(here("06_external_data/output/FINAL"), pattern = ".dedup.CollectInsertSizeMetrics.tab", full.names = TRUE) %>% 
+  lapply(function(fl){
+    # extract sample name
+    samp <- fl %>% basename() %>% str_split("[.]") %>% sapply(function(x) x[1])
+    
+    # read data in and add sample name
+    d <- read.table(fl, header = TRUE, dec = ",", skip = 6,nrows = 1, sep = "\t") %>% 
+      mutate(sample_id = samp) %>% 
+      dplyr::select(sample_id, everything())
+  }) %>% 
+  bind_rows() %>% 
+  mutate(data_set = "external") %>% 
+  dplyr::select(data_set, everything()) %>% 
+  as_tibble() 
+
+```
+
+```{r combine_insert_size_data}
+full_CollectInsertSizeMetrics_data <- bind_rows(
+  internal_CollectInsertSizeMetrics,
+  external_CollectInsertSizeMetrics
+  ) %>% 
+  # fix sample id
+  mutate(sample_id2 = str_split(sample_id, "_") %>% sapply(function(x) x[1])) %>% 
+  inner_join(sample_info, by = "sample_id2") %>% 
+  mutate(data_set = factor(data_set, levels = c("internal","external")),
+         breed = factor(breed, levels = c("Large White","Pietrain", "Landrace", "Duroc")))
+```
+
+```{r summary_table_insert_size}
+
+full_CollectInsertSizeMetrics_data %>% 
+  group_by(data_set) %>% 
+  summarise(n = n(), mean_size = mean(MEAN_INSERT_SIZE), sd_size = sd(MEAN_INSERT_SIZE)) %>% 
+  knitr::kable()
+
+```
+
+```{r vis_insert_sizes}
+full_CollectInsertSizeMetrics_data %>% 
+  group_by(data_set, breed) %>% 
+  summarise(n = n(), mean_size = mean(MEAN_INSERT_SIZE), sd_size = sd(MEAN_INSERT_SIZE)) %>% 
+  ggplot(aes(x = breed, y = mean_size, fill = data_set)) +
+    geom_bar(position = position_dodge(width=0.9), stat = "identity") +
+    geom_errorbar(aes(ymin = mean_size-sd_size, ymax = mean_size+sd_size), position = position_dodge(width=0.9), colour="black", width=0.3) +
+    scale_y_continuous(expand = c(1/50,1/50), breaks = scales::pretty_breaks(n = 10)) +
+    theme_bw(base_size = 12) +
+    facet_wrap(~breed, scales = "free_x", ncol = 5) +
+    ggtitle(label = "Mean Insert Size (+/- SD)") +
+    xlab(NULL)
+```
+
+# Variant call set metrics
+```{r main_vcf_metrics}
+final_vcf_metrics_detail <- here("10_FinalVCF","output","cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered.variant_calling_detail_metrics") %>% 
+  read.delim(stringsAsFactors = F, comment.char = "#", dec = ",") %>% 
+  inner_join(sample_info, by = c("SAMPLE_ALIAS" = "sample_id"))
+
+final_vcf_metrics_summary <- here("10_FinalVCF","output","cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered.variant_calling_summary_metrics") %>% 
+  read.delim(stringsAsFactors = F, comment.char = "#", dec = ",") 
+```
+
+```{r pop_vcf_metrics}
+
+breed_vcf_metrics_summary <- 
+  list(large_white = here("10_FinalVCF","output","cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_large_white..variant_calling_summary_metrics") %>%
+       read.delim(stringsAsFactors = F, comment.char = "#", dec = ",") ,
+     
+     landrace = here("10_FinalVCF","output","cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_landrace..variant_calling_summary_metrics") %>%
+       read.delim(stringsAsFactors = F, comment.char = "#", dec = ","),
+     
+     pietrian = here("10_FinalVCF","output","cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_pietrain..variant_calling_summary_metrics") %>%
+       read.delim(stringsAsFactors = F, comment.char = "#", dec = ","),
+     
+     duroc = here("10_FinalVCF","output","cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_duroc..variant_calling_summary_metrics") %>%
+       read.delim(stringsAsFactors = F, comment.char = "#", dec = ",")) %>% 
+  bind_rows(.id = "breed")
+
+```
+
+There are around 5M SNPs in the final SNP set
+
+```{r include=TRUE}
+final_vcf_metrics_summary %>%
+  dplyr::select(-contains("INDEL"), -contains("INS_DEL"), -contains("MULTIALLELIC"), -FILTERED_SNPS) %>% 
+  kable(digits = 3)
+```
+
+For each breed there are 3-4M SNPs
+
+```{r, include=TRUE}
+
+breed_vcf_metrics_summary %>% 
+  dplyr::select(-contains("INDEL"), -contains("INS_DEL"), -contains("MULTIALLELIC"), -FILTERED_SNPS, -SNP_REFERENCE_BIAS, NUM_SINGLETONS) %>% 
+  DT::datatable(width = '100%', options = list(scrollX = TRUE, dom = 't'), rownames = FALSE) 
+
+```
+
+# Genetic Structure
+
+Detect if samples can be assorted according to their corresponding breed.
+
+### Principal component analysis
+```{r}
+
+pc_pct <- here("11_genetic_str/output/pc_pct.csv") %>% read.csv()
+
+pc_eigenscores <- here("11_genetic_str/output/pc_eigenscores.csv") %>% read.csv() %>% 
+  inner_join(sample_info, by = c("sample.id"="sample_id"))
+
+```
+
+The first PC contains ~9% of the variance. PC1-4 together amount to ~25% of the variance. The first 7 PCs have ~30% of the variance.
+
+```{r, fig.height=3, fig.width=3} 
+pc_pct %>% 
+  ggplot(aes(x=PC,y=varprop)) +
+    geom_bar(stat = "identity") +
+    xlab("Principal Component") +
+    ylab("% Variance") +
+    scale_x_continuous(breaks = 1:7) +
+    theme_bw()
+```
+
+Breeds are well clustered along PC1-2, PC3-4. However, along PC5 samples breeds cannot be differentiated anymore, and along PC6 European wild boars depart from the other breeds.
+ 
+```{r, fig.height=3, fig.width=8}
+
+p1 <- pc_eigenscores %>% 
+        ggplot(data = ., aes(x=PC1,y=PC2,color=breed)) +
+          geom_point() +
+          theme_bw(base_size = 12) +
+          theme(legend.title = element_blank())
+
+p2 <- pc_eigenscores %>% 
+        ggplot(data = ., aes(x=PC3,y=PC4,color=breed)) +
+          geom_point() +
+          theme_bw(base_size = 12) +
+          theme(legend.title = element_blank())
+
+p3 <- pc_eigenscores %>% 
+        ggplot(data = ., aes(x=PC5,y=PC6,color=breed)) +
+          geom_point() +
+          theme_bw(base_size = 12) +
+          theme(legend.title = element_blank())
+
+ggarrange(p1,p2, p3, ncol = 3, nrow = 1, common.legend = TRUE)
+
+```
+
+
+### Hierarchical Clustering
+
+There are five clusters, one for every breed.
+
+```{r prepare_dendrogram_data, include=FALSE}
+dend <- readRDS(here("11_genetic_str/output/dendrogram_full_snp_set.rds")) %>% as.hclust()
+
+# change labels to group to avoid legend, re-order labels
+sample_info_hc_sorted <- sample_info[match(dend[["labels"]], sample_info$sample_id),]
+identical(sample_info_hc_sorted$sample_id, dend[["labels"]]) #check order of labels is the same! yes!
+
+dend[["labels"]] <- sample_info_hc_sorted$breed
+```
+
+```{r, fig.height=5, fig.width=5} 
+# colors based on palette Dark2 used later for admixture
+colrs <- c("#7570B3","#66A61E", "#1B9E77", "#D95F02", "#E7298A")
+names(colrs) <- sample_info_hc_sorted$breed %>% unique()
+
+# make 5 clusters
+clus5 <- cutree(dend, 5)
+
+# add colors by cluster, matching line with corresponding color
+colrs_tip <- colrs[names(clus5)]
+
+# Shorten label
+dend[["labels"]][dend[["labels"]] == "European Wild Boar"] <- "EWB"
+dend[["labels"]][dend[["labels"]] == "Pietrain"] <- "PI"
+dend[["labels"]][dend[["labels"]] == "Large White"] <- "LW"
+dend[["labels"]][dend[["labels"]] == "Landrace"] <- "LR"
+dend[["labels"]][dend[["labels"]] == "Duroc"] <- "DU"
+
+plot(as.phylo(dend), 
+     type = "fan", 
+     cex = 0.6,
+     no.margin = TRUE,
+     tip.color = colrs_tip)
+
+# good reference: http://www.sthda.com/english/wiki/beautiful-dendrogram-visualizations-in-r-5-must-known-methods-unsupervised-machine-learning
+
+```
+
+### ADMIXTURE
+
+Starting from two ancestral population, EWB has an equal ancestry proportion. Breeds are represented almost uniquely by one ancestor, with very little admixture.
+
+As the number of ancestral populations increase, so does the level of admixture in landrance. However, the rest of breeds and EWB display very little admixture.
+
+EWB did not represent breeds as expected. 
+
+```{r import_fam_info}
+# About sample ordering: https://www.biostars.org/p/221817/
+
+fam_fl <- read.table(here("11_genetic_str/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_header_fixed.fam"))
+```
+
+```{r make_ancestry_barplot_function}
+make_ancestry_barplot <- function(k){
+
+#k=2 #sample_info
+  
+  q_fl=here(paste0("11_genetic_str/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_header_fixed.",k,".Q"))
+  
+  k_dat <- read.table(q_fl) %>% 
+    bind_cols(
+      dplyr::select(fam_fl, V2) %>% dplyr::rename(sample_id = V2)
+      ) %>% 
+    left_join(
+      vroom(here("sample_info/internal_external_sample_info.tsv")), 
+      by = "sample_id"
+      ) %>% 
+    reshape2::melt(id.vars = c("sample_id","breed","project")) %>% 
+    mutate(breed = factor(breed, levels = c("European Wild Boar","Large White","Landrace","Pietrain","Duroc"))) %>% 
+    arrange(breed, sample_id)
+  
+  k_dat %>% 
+    ggplot(aes(x = sample_id, y = value,fill = variable)) +
+    geom_bar(stat = "identity", position = "stack", width = 1) +
+    theme_bw(base_size = 12) +
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+      legend.position = "none",
+      plot.title = element_text(hjust = 0.5)
+    ) +
+    xlab(NULL) +
+    ylab("Ancestry Fraction") +
+    ggtitle(paste0("K=",k)) +
+    scale_y_continuous(expand = c(0.005,0.005), breaks = seq(0,1,0.2)) +
+    scale_fill_brewer(palette = "Dark2") +
+    facet_grid(~breed, scales = "free") +
+    theme(panel.spacing = unit(1/15, "lines"),
+          strip.background = element_blank(), 
+          panel.border = element_blank(),
+          panel.grid = element_blank(),
+          axis.text.x = element_blank()) 
+  }
+
+```
+
+```{r, fig.height=10, fig.width=7}
+ggarrange(make_ancestry_barplot(2),
+          make_ancestry_barplot(3),
+          make_ancestry_barplot(4),
+          make_ancestry_barplot(5),
+          make_ancestry_barplot(6), ncol = 1, nrow = 5)
+```
+
+
+# Linkage Disequilibrium (LD)
+
+LD between SNPs at least 20Kb and up tp 5Mb appart.
+
+European wild boars have the weakest LD, followed by LargeWhite. Landrace and Duroc have the strongest LD, although Duroc decays to comparable levels with Pietrain after 2Mb.
+
+
+
+```{r display_LD_plot, out.width="50%", fig.align="center"}
+
+# plot done externally on HPC cluster. See corresponding directory output.
+
+knitr::include_graphics(here("12_LD_ROH/output", "LD_trends_max5Mb.png"))
+
+```
+
+# Runs of Homozygosity (ROH)
+
+Overall, wild boars are the most homozygous population, which is unexpected considering that the LD in wild boars is weakest of all.
+
+```{r ROH_import_regions, include=FALSE}
+
+roh_dat <- vroom(here("12_LD_ROH/output/ROH_regions.table"), col_types = c(`[3]Chromosome`="c")) %>% 
+  dplyr::rename(RG = `# RG`, sample = `[2]Sample`, chr = `[3]Chromosome`, start = `[4]Start`, end = `[5]End`, length_bp = `[6]Length (bp)`,
+                n_markers = `[7]Number of markers`, qual_avg_fwd_bwd_phred = `[8]Quality (average fwd-bwd phred score)`) %>% 
+  filter(RG != "# RG") %>% 
+  # exclude x-chrom
+  filter(chr != "X") %>% 
+  inner_join(
+    
+    # include an ordered-naming for later when plotting all samples together (i.e. boxplot)
+    sample_info %>% 
+      group_by(breed) %>% 
+      mutate(breed = ifelse(breed == "Duroc", "DU", breed),
+             breed = ifelse(breed == "Pietrain", "PI", breed),
+             breed = ifelse(breed == "Landrace", "LR", breed),
+             breed = ifelse(breed == "Large White", "LW", breed),
+             breed = ifelse(breed == "European Wild Boar", "EWB", breed)) %>% 
+      mutate(breed = factor(breed, levels = c("EWB","LW","LR","PI","DU")) ) %>% 
+      arrange(breed, sample_id), 
+
+    by = c("sample" = "sample_id"))
+
+
+dim(roh_dat) # 464108     10
+```
+
+```{r per_sample_avg_genome_prop_as_roh} 
+
+genome_length <- 2501912388 #Golden Path Length	2,501,912,388 (Sscrofa11.1)
+
+
+subset_by_roh_length <- function(fr, to, data_set){
+  
+  roh_dat %>% 
+    filter(length_bp >= as.numeric(fr), length_bp < as.numeric(to)) %>% 
+    group_by(breed,sample) %>% 
+    summarise(per_sample_genome_fraction = sum(length_bp)/genome_length) %>% 
+    ungroup() %>%
+    group_by(breed) %>% 
+    summarise(mean_per_sample_genome_fraction = mean(per_sample_genome_fraction),
+              sd_per_sample_genome_fraction = sd(per_sample_genome_fraction)) %>% 
+    mutate(data_set = data_set)
+}
+
+fractions <- bind_rows(
+  subset_by_roh_length(0, 1e6, "0-1Mb"),
+  subset_by_roh_length(1e6, 2e6, "1-2Mb"),
+  subset_by_roh_length(2e6, 4e6, "2-4Mb"),
+  subset_by_roh_length(4e6, 8e6, "4-8Mb"),
+  subset_by_roh_length(8e6, 16e6, "8-16Mb"),
+  
+    
+  roh_dat %>% 
+    filter(length_bp > 16e6) %>% 
+    group_by(breed,sample) %>% 
+    summarise(per_sample_genome_fraction = sum(length_bp)/genome_length) %>% 
+    ungroup() %>%
+    group_by(breed) %>% 
+    summarise(mean_per_sample_genome_fraction = mean(per_sample_genome_fraction),
+              sd_per_sample_genome_fraction = sd(per_sample_genome_fraction)) %>% 
+    mutate(data_set = ">16Mb")
+  
+  )  %>% 
+  mutate(data_set = factor(data_set, levels = c("0-1Mb", "1-2Mb", "2-4Mb", "4-8Mb", "8-16Mb", ">16Mb"))) %>% 
+  mutate(errors_lower = mean_per_sample_genome_fraction - sd_per_sample_genome_fraction,
+         errors_upper = mean_per_sample_genome_fraction + sd_per_sample_genome_fraction)
+
+
+ggplot(fractions, aes(x = breed, y = mean_per_sample_genome_fraction, fill = data_set)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = errors_lower, ymax = errors_upper), position =  position_dodge2(width = 0.5, padding = 0.5)) +
+  theme_bw(base_size = 12) +
+  xlab(NULL) +
+  ylab("genome fraction") +
+  ggtitle("Mean per-sample genome fractions as ROHs") +
+  scale_fill_brewer(palette="Dark2") +
+  scale_y_continuous(breaks = seq(0,1,0.05), expand = c(0.01,0.01)) +
+  theme(legend.title = element_blank(), plot.title = element_text(hjust = 0.5))
+
+```
+
+ 
+```{r}
+
+roh_dat %>% 
+  mutate(is_short = length_bp < 1e6) %>% 
+  group_by(is_short, breed, sample) %>% 
+  summarise(per_sample_genome_fraction = sum(length_bp)/genome_length) %>% 
+  ungroup() %>%
+  group_by(is_short, breed) %>% 
+  summarise(mean = mean(per_sample_genome_fraction),
+            sd = sd(per_sample_genome_fraction)) %>% 
+  mutate(roh_length = ifelse(is_short, "<1Mb",">1Mb")) %>% 
+  reshape2::dcast(roh_length ~ breed, value.var = "mean") %>% 
+  janitor::adorn_totals() %>% 
+  knitr::kable(digits = 2, caption = "Mean genomic proportion in homozygosity")
+  
+```
+
+# Detection of shared regions of genetic differentiation (dam vs sire groups)
+
+This part of the analysis deals with the detection of regions in which the (combined) breeds used as dams diverge from the the (combined) breeds used as sires.
+
+```{r import_fst_dam_sire_data, include=FALSE} 
+
+fst_win_dam_sire_prep <- vroom(here("13_Fst/output/fst_win_dam_vs_sire.windowed.weir.fst")) %>% 
+  # keep windows with at least 10 SNPs
+  filter(N_VARIANTS >= 10) %>% 
+  # calculate z-scores
+  mutate(is_x = CHROM == "X") %>% 
+  group_by(is_x) %>% 
+  mutate(zFst = scale(MEAN_FST)[,1]) %>% 
+  ungroup() %>% 
+  mutate(CHROM = factor(CHROM, levels = c(1:18,"X")))
+
+```
+
+### Summary
+
+```{r} 
+
+fst_win_dam_sire_prep %>% 
+  dplyr::select(CHROM, BIN_START, BIN_END, MEAN_FST, zFst) %>% 
+  reshape2::melt(id.vars = c("CHROM","BIN_START","BIN_END")) %>% 
+  group_by(variable) %>% 
+  summarise(min = min(value), 
+            mean = mean(value), 
+            median = median(value), 
+            q99 = quantile(value, 0.99),
+            q99.7 = quantile(value, 0.997),
+            q99.8 = quantile(value, 0.998),
+            q99.9 = quantile(value, 0.999),
+            max = max(value)) %>% 
+  kable(digits = 2)
+
+```
+
+
+### Windowed Fst distribution
+```{r}  
+
+ggarrange(
+  
+  fst_win_dam_sire_prep %>% 
+    dplyr::select(CHROM, BIN_START, BIN_END, MEAN_FST, zFst) %>% 
+    reshape2::melt(id.vars = c("CHROM","BIN_START","BIN_END")) %>%
+    ggplot(aes(x = value)) +
+      geom_histogram(bins = 50) +
+      facet_wrap(~variable, nrow = 2, scales = "free") +
+      theme_bw(base_size = 12) +
+      ylab(NULL) +
+      xlab(NULL),
+  
+  fst_win_dam_sire_prep %>% 
+    dplyr::select(CHROM, BIN_START, BIN_END, MEAN_FST, zFst) %>% 
+    reshape2::melt(id.vars = c("CHROM","BIN_START","BIN_END")) %>% 
+    ggplot(aes(y = variable, x = value)) +
+      geom_violin() +
+      facet_wrap(~variable, nrow = 2, scales = "free") +
+      theme_bw(base_size = 12) +
+      theme(axis.text.y = element_blank()) +
+      ylab(NULL) +
+      xlab(NULL),
+  
+  nrow = 1,
+  ncol = 2
+  
+)
+
+```
+
+
+### Manhattan
+
+```{r make_manhattan_plots, eval = FALSE} 
+
+# https://danielroelfs.com/blog/how-i-create-manhattan-plots-using-ggplot/
+
+data_cum <- fst_win_dam_sire_prep %>% 
+  mutate(center = (BIN_START + (BIN_END-BIN_START)/2 )) %>% 
+  group_by(CHROM) %>% 
+  summarise(max_bp = max(center)) %>% 
+  mutate(bp_add = lag(cumsum(max_bp), default = 0)) %>% 
+  dplyr::select(CHROM, bp_add)
+
+fst_win_dam_sire_prep_manhattan <- fst_win_dam_sire_prep %>% 
+  mutate(center = (BIN_START + (BIN_END-BIN_START)/2 )) %>% 
+  inner_join(data_cum, by = "CHROM") %>% 
+  mutate(bp_cum = center + bp_add)
+
+
+axis_set <- fst_win_dam_sire_prep_manhattan %>% 
+  group_by(CHROM) %>% 
+  summarise(center = mean(bp_cum))
+
+
+p_man_fst <- ggplot(fst_win_dam_sire_prep_manhattan, aes(x = bp_cum, y = MEAN_FST, color = CHROM)) +
+  geom_point(alpha = 0.75) +
+  scale_x_continuous(label = axis_set$CHROM, breaks = axis_set$center, expand = c(1/1000,1/1000)) +
+  scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 10)) +
+  scale_color_manual(values = rep(c("black","darkgrey"), nrow(axis_set)) ) +
+  labs(x = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+
+p_man_z_fst <- ggplot(fst_win_dam_sire_prep_manhattan, aes(x = bp_cum, y = zFst, color = CHROM)) +
+  geom_point(alpha = 0.75) +
+  scale_x_continuous(label = axis_set$CHROM, breaks = axis_set$center, expand = c(1/1000,1/1000)) +
+  scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 10)) +
+  scale_color_manual(values = rep(c("black","darkgrey"), nrow(axis_set)) ) +
+  labs(x = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+
+p_man_fst_autosomes <- fst_win_dam_sire_prep_manhattan %>% 
+  filter(CHROM != "X") %>% 
+  ggplot(aes(x = bp_cum, y = MEAN_FST, color = CHROM)) +
+  geom_point(alpha = 0.75) +
+  scale_x_continuous(label = filter(axis_set, CHROM != "X")$CHROM, breaks = filter(axis_set, CHROM != "X")$center, expand = c(1/1000,1/1000)) +
+  scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 10)) +
+  scale_color_manual(values = rep(c("black","darkgrey"), nrow(filter(axis_set, CHROM != "X"))) ) +
+  labs(x = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+p_man_z_fst_autosomes <- fst_win_dam_sire_prep_manhattan %>% 
+  filter(CHROM != "X") %>% 
+  ggplot(aes(x = bp_cum, y = zFst, color = CHROM)) +
+  geom_point(alpha = 0.75) +
+  scale_x_continuous(label = filter(axis_set, CHROM != "X")$CHROM, breaks = filter(axis_set, CHROM != "X")$center, expand = c(1/1000,1/1000)) +
+  scale_y_continuous(expand = c(1/100,1/100), breaks = scales::pretty_breaks(n = 10)) +
+  scale_color_manual(values = rep(c("black","darkgrey"), nrow(filter(axis_set, CHROM != "X"))) ) +
+  labs(x = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+
+png(here("00_analysis/figures/manhattan_genomewide_fst_incl_x.png"), res = 300, width = 3000, height = 2000, units = "px"); print(p_man_fst); dev.off()
+png(here("00_analysis/figures/manhattan_genomewide_z_fst_incl_x.png"), res = 300, width = 3000, height = 2000, units = "px"); print(p_man_z_fst); dev.off()
+
+png(here("00_analysis/figures/manhattan_genomewide_fst_excl_x.png"), res = 300, width = 3000, height = 2000, units = "px"); print(p_man_fst_autosomes); dev.off()
+png(here("00_analysis/figures/manhattan_genomewide_z_fst_excl_x.png"), res = 300, width = 3000, height = 2000, units = "px"); print(p_man_z_fst_autosomes); dev.off()
+```
+
+```{r display_manhattan_plots}
+
+knitr::include_graphics(c(here("00_analysis/figures/manhattan_genomewide_fst_excl_x.png"),
+                        here("00_analysis/figures/manhattan_genomewide_z_fst_excl_x.png")))
+
+```
+
+### Genes in regions of very extreme Fst (zFst > 8) 
+
+After visual inspection, a zFst of 8 (Fst > 0.6 ) was chosen as threshold, resulting in a 5 of genes that were further investigated.
+
+Genes were only found in outliers located in chr8 (maxgap = 50Kb). 
+
+Each gene was investigated to see if it has a relationship with sire and dam phenotypes.
+
+
+```{r}
+
+xtrm_fst_win <- fst_win_dam_sire_prep %>% 
+  filter(zFst > 8) %>% 
+  dplyr::rename(seqnames = CHROM, start = BIN_START, end = BIN_END) %>% 
+  makeGRangesFromDataFrame()
+
+gene_res <- subsetByOverlaps(ssc_gene_set, xtrm_fst_win, maxgap = 50000) 
+  
+gene_res %>%   
+  as.data.frame() %>% 
+  dplyr::select(-strand, -width) %>% 
+  kable()
+
+```
+
+#### ATP10D (ENSSSCG00000008812)
+
+* ATPase phospholipid transporting 10D
+
+* https://pubmed.ncbi.nlm.nih.gov/28542499/
+  - "In summary we found that ATP10D reduces high-fat diet induced obesity and improves insulin sensitivity. ATP10D transgenic mice showed altered hepatic expression of lipid-metabolism associated genes, including Scd1, along with changes in hepatic and plasma lipid species and plasma lipoprotein pattern." 
+
+* https://pubmed.ncbi.nlm.nih.gov/19254779/
+  - "deficiency of Atp10a and Atp10d leads to insulin resistance and obesity in mice." 
+
+* Lipid metabolism has been affected by selective breeding in pigs:  
+  - https://pubmed.ncbi.nlm.nih.gov/32138208/
+    + "Modern pig breeds, which have been genetically improved to achieve fast growth and a lean meat deposition, differ from local pig breeds with respect to fat deposition, fat specific metabolic characteristics and various other properties. " 
+  - https://www.nature.com/articles/s41598-020-67015-4
+    + "pig breeding companies have produced commercial pigs that grow faster and have superior carcasses. However, these carcasses have become leaner having less IMF" 
+
+* Studies in pig reporting ATP10D:
+  - https://www.sciencedirect.com/science/article/pii/S2589004219302500
+    + "SVs identified influence genes involved in metabolic disorders. Three genes, AHNAK, ADGRF5/GPR116, and ATP10D, reported to regulate obesity (Ramdas et al., 2015), were affected by both deletion and duplication events within exonic regions" ... "ATP10D is involved in endoplasmic reticulum-to-Golgi ceramide processing and regulation of obesity (Kengia et al., 2013). " 
+  
+  - https://academic.oup.com/jas/article/94/6/2317/4702119
+    + "Previously reported QTL ... ATP10D ... BWT, ADG, and lipid accretion rate .. Input traits in parity 2, such as FML and total EIP, were found to be associated with a 1-Mb region at 40 Mb on chromosome 8. The suggested candidate gene in this region, adenosinetriphosphatase, class V, type 10D (ATP10D), is implicated in phospholipid translocation (Tanaka et al., 2011). The QTL reported for this region in PigQTLdb were associated with traits such as growth, BW at end of performance test period, and lipid accretion rate (Duthie et al., 2008; Ai et al., 2012)."
+  
+
+#### CORIN (ENSSSCG00000008813)
+
+* https://www.ensembl.org/Sus_scrofa/Gene/Ontologies/biological_process?db=core;g=ENSSSCG00000008813;r=8:37530815-37809761
+  - corin, serine peptidase
+  - GO:0007565	female pregnancy
+
+* https://pubmed.ncbi.nlm.nih.gov/22437503/
+  - "Corin (also known as atrial natriuretic peptide-converting enzyme) is a cardiac protease that activates atrial natriuretic peptide (ANP), a cardiac hormone that is important in regulating blood pressure. Unexpectedly, corin expression was detected in the pregnant uterus. Here we identify a new function of corin and ANP in promoting trophoblast invasion and spiral artery remodelling. "
+  - "These results indicate that corin and ANP are essential for physiological changes at the maternal-fetal interface, suggesting that defects in corin and ANP function may contribute to pre-eclampsia."
+  
+* More studies reporting the role of Corin in pregnancy and pre-eclampsia:
+   - https://pubmed.ncbi.nlm.nih.gov/32084366/
+   - https://pubmed.ncbi.nlm.nih.gov/30580684/
+   - https://pubmed.ncbi.nlm.nih.gov/32442927/
+   - https://pubmed.ncbi.nlm.nih.gov/33264706/
+   - https://pubmed.ncbi.nlm.nih.gov/30890412/
+   - https://pubmed.ncbi.nlm.nih.gov/30595185/
+
+* Studies in pig (pubmed: corin + pig)
+  - https://link.springer.com/article/10.1007/s13258-017-0529-4
+    + This paper uses some overlapping data with my data set (PRJNA260763)
+    + "Several genes (e.g., PLSCR4, AGTR1 and CORIN) were related to reproduction traits such as fertility, ovulation rate, and uterine function. "
+    + "CORIN plays a role in female pregnancy by promoting trophoblast invasion and spiral artery remodeling in the uterus (Cui et al. 2012; Soares et al. 2014). It is expressed in the pregnant mouse and human uterus to which its impaired expression is associated with preeclampsia, a major risk factor for placental abruption (Cui et al. 2012; Nagashima et al. 2013). We scanned the gene region for non-synonymous mutations and identified 16 missense variants in this gene region (Table 3)."
+
+#### TNIP3 (ENSSSCG00000009100)
+
+* TNFAIP3 interacting protein 3
+
+* https://www.ensembl.org/Sus_scrofa/Gene/Summary?db=core;g=ENSSSCG00000009100;r=8:102892317-102993338
+  - GO terms (BP) related to response to pathgenes.
+  
+* The literature is very similar to what is indicated by the GO terms.
+
+* Pig specific literature:
+
+  - https://academic.oup.com/biolreprod/article/100/1/71/5068674 (weak evidence!)
+    + "Thus, lactocrine deficiency on the first day of postnatal life can alter uterine developmental trajectory with lasting effects on endometrial responses to pregnancy as reflected at the level of the transcriptome on PxD 13."
+    + "The top 10 most highly differentially expressed endometrial mRNAs in high as compared to low iCrit gilts on PxD 13 included NPY, ACOD1, CTRL, TGM3, TNIP3, FAM151A, CRISP3, NLRC4, FGA, and ACSBG1 (Supplemental Table S3)."
+
+
+#### ENSSSCG00000035060
+
+* This is a novel gene without associated reports of functions.
+
+#### NDNF (ENSSSCG00000029260)
+
+* https://www.ensembl.org/Sus_scrofa/Gene/Summary?db=core;g=ENSSSCG00000029260;r=8:102996281-103088268
+    - neuron derived neurotrophic factor 
+    - GO terms (BP)
+      + angiogenesis, neuron migration, response to ischemia, nitric oxide mediated signal transduction, positive regulation of cell-substrate adhesion, positive regulation of neuron projection development, peptide cross-linking via chondroitin 4-sulfate glycosaminoglycan, **gonadotrophin-releasing hormone neuronal migration to the hypothalamus**, 	extracellular matrix organization, 	negative regulation of neuron apoptotic process, 	cellular response to fibroblast growth factor stimulus, 	vascular wound healing, cellular response to hypoxia, 	negative regulation of endothelial cell apoptotic process
+      
+* https://pubmed.ncbi.nlm.nih.gov/31883645/
+  - "Neuron-Derived Neurotrophic Factor Is Mutated in Congenital Hypogonadotropic Hypogonadism"
+    
+    
+
+
+
+
+
+
+
+
+
+
+

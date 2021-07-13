@@ -1,0 +1,94 @@
+---
+title: "Low Div per population analysis"
+output: 
+  html_document:
+    toc: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE, warning = FALSE)
+
+library(here)
+library(vroom)
+library(tidyverse)
+```
+
+```{r gene_set} 
+
+ssc_gene_set <- readRDS(here("ref_ensemble95/gene_set/ssc_gene_set.rds"))
+
+ssc_gene_set_with_descr <- readRDS(here("ref_ensemble95/gene_set/ssc_gene_set_with_description.rds"))
+
+```
+
+```{r import_data, include=FALSE}
+
+idx <- here("15_pi/output") %>% list.files(pattern = ".pi", full.names = TRUE) %>% grepl(pattern = "pietrain|large_white|duroc|landrace|euro_wild_boar")
+
+fls <- here("15_pi/output") %>% list.files(pattern = ".pi", full.names = TRUE) %>% .[idx]
+
+pi_dat <- lapply(fls, function(fl){
+
+  fl %>% 
+    # import data
+    vroom() %>% 
+    # keep windows with at least 10 SNPs
+    filter(N_VARIANTS >= 10) %>% 
+    # label records corresponding to X
+    filter(CHROM %in% c(1:18,"X")) %>% 
+    mutate(is_x = (CHROM == "X")) %>% 
+    # group by autosomes and X
+    group_by(is_x) %>% 
+    # standarized autosomes and X separately
+    mutate(zPI = scale(PI)[,1]) %>% 
+    ungroup() %>%
+    # set chr levels
+    mutate(CHROM = factor(CHROM, levels = c(1:18,"X")))
+  
+})
+  
+names(pi_dat) <- fls %>% basename() %>% str_remove("cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_") %>% str_remove("_all_sites.windowed.pi")
+
+pi_dat <- pi_dat %>% 
+  bind_rows(.id = "pop") %>% 
+  mutate(pop = factor(pop, levels = c("pietrain","duroc", "large_white", "landrace", "euro_wild_boar")))
+```
+
+# Intro
+
+Identify regions of extremely (genomic outliers) low genetic diversity within each line using PI. 
+
+# Check PI and zPI distribution
+
+### PI
+```{r fig.height=5}
+
+pi_dat %>% 
+  ggplot(aes(x = PI)) +
+    geom_histogram() +
+    facet_wrap(~pop, nrow = 2, scales = "free")  
+
+```
+
+### zPI
+```{r fig.height=5}
+
+pi_dat %>% 
+  ggplot(aes(x = zPI)) +
+    geom_histogram() +
+    facet_wrap(~pop, nrow = 2, scales = "free")  
+
+```
+
+# Conclusion
+
+This analysis was not continued because there are no outliers at the left hand side (low diverstity) of PI distribution.
+
+
+
+
+
+
+
+
+
