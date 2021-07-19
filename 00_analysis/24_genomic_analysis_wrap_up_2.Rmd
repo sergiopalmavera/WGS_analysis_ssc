@@ -1,5 +1,5 @@
 ---
-title: "Genome analysis wrap up"
+title: "Genome analysis dam vs sire lines"
 output: 
   html_document:
     toc: 5
@@ -37,20 +37,87 @@ ensembl <- useEnsembl(biomart = "genes", dataset = "sscrofa_gene_ensembl", versi
 
 ```
 
+```{r function_run_WebGestaltR, eval = FALSE} 
+#---------------------------
+# function_run_WebGestaltR
+#---------------------------
+
+run_WebGestaltR <- function(
+  interestGene, # vector of genes as input
+  projectName, # the suffix to which "Project_" is appended
+  enrichDatabase, # the data base to query  
+  outputDirectory # where to store the results
+  ){
+  res <- WebGestaltR(
+    enrichDatabase = enrichDatabase,
+    enrichMethod = "ORA",
+    organism = "sscrofa",
+    interestGene = interestGene,
+    interestGeneType = "ensembl_gene_id",
+    referenceSet = "genome",
+    sigMethod = "fdr",
+    fdrMethod = "BH",
+    fdrThr = 0.1,
+    topThr = 100,
+    reportNum = 20,
+    isOutput = TRUE,
+    outputDirectory = outputDirectory,
+    hostName = "http://www.webgestalt.org/",
+    projectName = projectName
+  )
+  
+  write.csv(
+    res, 
+    file.path(outputDirectory,paste0("Project_", projectName), paste0(enrichDatabase,"_sig_results.csv"))
+  )
+}
+
+run_WebGestaltR_hsa <- function(
+  interestGene, # vector of genes as input
+  projectName, # the suffix to which "Project_" is appended
+  enrichDatabase, # the data base to query  
+  outputDirectory # where to store the results
+  ){
+  res <- WebGestaltR(
+    enrichDatabase = enrichDatabase,
+    enrichMethod = "ORA",
+    organism = "hsapiens",
+    interestGene = interestGene,
+    interestGeneType = "ensembl_gene_id",
+    referenceSet = "genome",
+    sigMethod = "fdr",
+    fdrMethod = "BH",
+    fdrThr = 0.1,
+    topThr = 100,
+    reportNum = 20,
+    isOutput = TRUE,
+    outputDirectory = outputDirectory,
+    hostName = "http://www.webgestalt.org/",
+    projectName = projectName
+  )
+  
+  write.csv(
+    res, 
+    file.path(outputDirectory,paste0("Project_", projectName), paste0(enrichDatabase,"_sig_results.csv"))
+  )
+}
+
+```
+
 
 # Introduction
 
-This documents summarises the results obtained from analyzing genomic data produced for the SOSFERT project and from other publications.
+This document summarises the results obtained from analyzing genomic data produced by the SOSFERT project and from other publications.
 
 The aim is to identify genomic regions associated to fertility and muscle mass.
 
 As part of the SOSFERT project, two pig-breeds were sequenced at ~50x: Pietrain (n=10) and Large-White (n=10).
 
-Since the number of animals in the SOSFERT sample set is too low, more data was brought in from external sources (published results) and also from other breeds. This external data had lower coverage (~10x).
+Since the number of SOSFERT animals too low for conducting population genetic analyses, more WGS data was brought in from external sources (published results). The external data had lower coverage (~5-10x).
 
-The new breeds that were added besides Pietrain and Large-White were Duroc and Landrace. The rationale behind this was to have breeds used for similar purposes (breeds used as dam lines: Large-White and Landrace; breeds used as sire lines: Pietrain and Duroc).
+The new breeds that were added besides Pietrain and Large-White were Duroc and Landrace. In this way, the data set contains two breeds used as dams (Lanrge White and Landrace) and two breeds used as sires (Pietrain and Landrace).
 
-Breeds used as sires are characterized for having higher muscularity and dams, for their higher prolifically.
+Breeds used as sires are characterized for having higher muscularity; dams for their higher prolificity
 
 European wild boars were included. Originally, the idea was to use them as representatives of the funder population. But apparently they are not suitable for that purpose (i.e. commercial breeds are not derived from wild boards only).
 
@@ -74,7 +141,7 @@ sample_info %>%
 
 # Sequencing coverage
 
-Sequencing coverage after alignment and removal of reads with lower than 20 mapping quality and bases below 20 base quality.
+Sequencing coverage after alignment for reads with mapping quality >20 and bases with quality >20. The SOSFERT data is indicated by label "internal" and the imported data is indicated by the label "external".
 
 ```{r}
 
@@ -123,7 +190,7 @@ full_CollectWgsMetrics_data %>%
   group_by(breed, data_set) %>% 
   summarise(n = n(), mean_cvg = mean(MEAN_COVERAGE), sd_cvg = sd(MEAN_COVERAGE), min = min(MEAN_COVERAGE), max = max(MEAN_COVERAGE)) %>%
   arrange(breed, data_set) %>% 
-  dplyr::select(-data_set) %>% 
+  #dplyr::select(-data_set) %>% 
   knitr::kable(digits = 2)
 
 ```
@@ -194,7 +261,7 @@ full_CollectInsertSizeMetrics_data <- bind_rows(
   mutate(sample_id2 = str_split(sample_id, "_") %>% sapply(function(x) x[1])) %>% 
   inner_join(sample_info, by = "sample_id2") %>% 
   mutate(data_set = factor(data_set, levels = c("internal","external")),
-         breed = factor(breed, levels = c("Large White","Pietrain", "Landrace", "Duroc")))
+         breed = factor(breed, levels = c("Large White","Pietrain", "Landrace", "Duroc", "European Wild Boar")))
 ```
 
 ```{r summary_table_insert_size}
@@ -243,7 +310,12 @@ breed_vcf_metrics_summary <-
        read.delim(stringsAsFactors = F, comment.char = "#", dec = ","),
      
      duroc = here("10_FinalVCF","output","cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_duroc..variant_calling_summary_metrics") %>%
-       read.delim(stringsAsFactors = F, comment.char = "#", dec = ",")) %>% 
+       read.delim(stringsAsFactors = F, comment.char = "#", dec = ","),
+     
+     eur_wild_boar = here("10_FinalVCF","output","cohort_biallelicSNPs_HardFiltered_WithMissingness_filtered_euro_wild_boar..variant_calling_summary_metrics") %>% 
+       read.delim(stringsAsFactors = F, comment.char = "#", dec = ",")
+     
+     ) %>% 
   bind_rows(.id = "breed")
 
 ```
@@ -268,7 +340,7 @@ breed_vcf_metrics_summary %>%
 
 # Genetic Structure
 
-Detect if samples can be assorted according to their corresponding breed.
+Check if samples can be assorted according to their corresponding population.
 
 ### Principal component analysis
 ```{r}
@@ -363,7 +435,7 @@ plot(as.phylo(dend),
 
 ### ADMIXTURE
 
-Starting from two ancestral population, EWB has an equal ancestry proportion. Breeds are represented almost uniquely by one ancestor, with very little admixture.
+Starting from two ancestral population, EWB has an equal ancestry proportion. Breeds are represented almost uniquely by one ancestor population, with very little admixture.
 
 As the number of ancestral populations increase, so does the level of admixture in landrance. However, the rest of breeds and EWB display very little admixture.
 
@@ -426,14 +498,11 @@ ggarrange(make_ancestry_barplot(2),
           make_ancestry_barplot(6), ncol = 1, nrow = 5)
 ```
 
-
 # Linkage Disequilibrium (LD)
 
 LD between SNPs at least 20Kb and up tp 5Mb appart.
 
 European wild boars have the weakest LD, followed by LargeWhite. Landrace and Duroc have the strongest LD, although Duroc decays to comparable levels with Pietrain after 2Mb.
-
-
 
 ```{r display_LD_plot, out.width="50%", fig.align="center"}
 
@@ -547,9 +616,14 @@ roh_dat %>%
   
 ```
 
+
+
+
+
+
 # Detection of shared regions of genetic differentiation (dam vs sire groups)
 
-This part of the analysis deals with the detection of regions in which the (combined) breeds used as dams diverge from the the (combined) breeds used as sires.
+This part of the analysis deals with the detection of regions in which the (combined) breeds used as dams diverge from the the (combined) breeds used as sires. To measure the divergence between groups the FST metric was computed.
 
 ```{r import_fst_dam_sire_data, include=FALSE} 
 
@@ -566,6 +640,8 @@ fst_win_dam_sire_prep <- vroom(here("13_Fst/output/fst_win_dam_vs_sire.windowed.
 ```
 
 ### Summary
+
+The maximun level of differentiation has an FST score of 0.7. Below 7, there is quite a bit of gap with the 99.9 percentile for which the FST is only 0.41. 
 
 ```{r} 
 
@@ -584,7 +660,6 @@ fst_win_dam_sire_prep %>%
   kable(digits = 2)
 
 ```
-
 
 ### Windowed Fst distribution
 ```{r}  
@@ -707,11 +782,11 @@ p_man_z_fst_autosomes <- fst_win_dam_sire_prep_manhattan %>%
   )
 
 
-png(here("00_analysis/figures/manhattan_genomewide_fst_incl_x.png"), res = 300, width = 3000, height = 2000, units = "px"); print(p_man_fst); dev.off()
-png(here("00_analysis/figures/manhattan_genomewide_z_fst_incl_x.png"), res = 300, width = 3000, height = 2000, units = "px"); print(p_man_z_fst); dev.off()
+png(here("00_analysis/figures/manhattan_genomewide_fst_incl_x.png"), res = 300, width = 3000, height = 1000, units = "px"); print(p_man_fst); dev.off()
+png(here("00_analysis/figures/manhattan_genomewide_z_fst_incl_x.png"), res = 300, width = 3000, height = 1000, units = "px"); print(p_man_z_fst); dev.off()
 
-png(here("00_analysis/figures/manhattan_genomewide_fst_excl_x.png"), res = 300, width = 3000, height = 2000, units = "px"); print(p_man_fst_autosomes); dev.off()
-png(here("00_analysis/figures/manhattan_genomewide_z_fst_excl_x.png"), res = 300, width = 3000, height = 2000, units = "px"); print(p_man_z_fst_autosomes); dev.off()
+png(here("00_analysis/figures/manhattan_genomewide_fst_excl_x.png"), res = 300, width = 3000, height = 1000, units = "px"); print(p_man_fst_autosomes); dev.off()
+png(here("00_analysis/figures/manhattan_genomewide_z_fst_excl_x.png"), res = 300, width = 3000, height = 1000, units = "px"); print(p_man_z_fst_autosomes); dev.off()
 ```
 
 ```{r display_manhattan_plots}
@@ -753,12 +828,12 @@ fst_outliers <- c(fst_outliers_0.1pct, fst_outliers_1pct_near_fst_outliers_0.1pc
 
 ``` 
 
-Number of ouflier regions merged
+Number of outlier regions. Outliers are found in most chromosomes except for chr 4, 5, 10, 11, 12 and 17.
+
 ```{r}
 fst_outliers %>% reduce(min.gapwidth = 1) %>% as_tibble() %>% group_by(seqnames) %>% summarise(n_intervals = n())
 ```
 
-Outliers are found in most chromosomes except for chr 4, 5, 10, 11, 12 and 17.
 
 ```{r fst_find_genes} 
 
@@ -766,16 +841,76 @@ genes_fst_outliers <- subsetByOverlaps(ssc_gene_set, fst_outliers, maxgap = 5000
 
 ```
 
-There are `r  genes_fst_outliers %>% length()` genes in outlier regions.
+There are `r  genes_fst_outliers %>% length()` genes in outlier regions. Some protein coding genes lack description because they are novel genes.
 ```{r fst_display_genes}
 
 genes_fst_outliers %>%
   as_tibble() %>% 
+  # add gene description
+  inner_join(
+    ssc_gene_set_with_descr %>% 
+      dplyr::select(gene_id, description) %>% 
+      dplyr::rename(gene_description = description), 
+    by = "gene_id"
+  ) %>% 
   arrange(seqnames, start, end) %>% 
-  DT::datatable(rownames = FALSE, options = list(pageLength = 20))
+  DT::datatable(rownames = FALSE, options = list(pageLength = 5))
 
 ```
 
+
+### Enrichment Analysis - hsa orthologs
+
+Outlier pig genes were mapped to their human orthologous and def to WebGestalt. There were no significant results.
+```{r fst_transform_ssc_to_hsa_ids, include=FALSE, eval = FALSE}
+
+listAttributes(ensembl) %>% View()
+
+vals <- genes_fst_outliers$gene_id %>% unique()
+
+vals %>% length() #139
+
+ssc_fst_outlier_genes_to_hsa <- getBM(attributes = c("ensembl_gene_id", "hsapiens_homolog_ensembl_gene"),  
+                                  filters = "ensembl_gene_id", 
+                                  values = vals, mart = ensembl)
+
+
+ssc_fst_outlier_genes_to_hsa$ensembl_gene_id %>% unique() %>% length() #139
+
+ssc_fst_outlier_genes_to_hsa %>% filter(hsapiens_homolog_ensembl_gene != "") %>% .$hsapiens_homolog_ensembl_gene %>% unique() %>% length() #118
+
+# add gene infirmation and export
+
+inner_join(ssc_fst_outlier_genes_to_hsa, ssc_gene_set_with_descr, by = c("ensembl_gene_id"="gene_id")) %>% 
+  as_tibble() %>% 
+  unique() %>% 
+  write.csv(here("00_analysis/data/webgestalt_fst_dam_sire/ssc_to_hsa_orthologs_and_information_genes_FST_PI_LW_outliers_sosfert_external.csv"))
+
+```
+
+```{r fst_run_WebGestaltR_hsa_ortho, eval = FALSE}
+
+gns <- ssc_fst_outlier_genes_to_hsa %>% 
+  filter(hsapiens_homolog_ensembl_gene != "") %>% 
+  .$hsapiens_homolog_ensembl_gene %>% 
+  unique()
+
+run_WebGestaltR_hsa(
+  interestGene=gns,
+  projectName="GOBP_hsa_ortho",
+  enrichDatabase="geneontology_Biological_Process",
+  outputDirectory=here("00_analysis/data/webgestalt_fst_dam_sire")
+)
+
+
+run_WebGestaltR_hsa(
+  interestGene=gns,
+  projectName="KEGG_hsa_ortho_dam",
+  enrichDatabase="pathway_KEGG",
+  outputDirectory=here("00_analysis/data/webgestalt_fst_dam_sire")
+) 
+
+```
 
 
 ### Genes in regions of very extreme Fst (zFst > 8) 
@@ -894,9 +1029,15 @@ gene_res %>%
 
 
 
+
+
+
+
 # Detection of shared-specific regions of reduced diversity (dam vs sire groups)
 
-Nucleotide diversity was calculated in windows (size = 50K, step = 25K) with at least 10 SNPs per breed.
+This analysis is complementary to the FST analysis. The difference is that extreme scores are achieved when one population displays low diversity in a given genomic region, while the other population is highly diverse. This is quatified by the nucleotide diversity ratio.
+
+Nucleotide diversity (Pi) was calculated in windows (size = 50K, step = 25K) with at least 10 SNPs per breed.
 
 In order to make sure each breed was correctly represented within sire and dam lines combined populations, pi was pre-computed for each breed and windows where pi was computed were kept as long as at least 10 SNPs were used in the calculation.
 
@@ -993,7 +1134,7 @@ pi_dat %>%
 
 ```
 
-Distribution of pi-ratios after z and log transformation
+Distribution of pi-ratios after z and log transformation. The log transformation allows to equally weight results found at the left and right of the distribution.
 
 ```{r log10_pi_ratio_distribution, fig.height=3, fig.width=3} 
 
@@ -1057,7 +1198,6 @@ png(here("00_analysis/figures/manhattan_genomewide_z_log10_pi_ratio_excl_x.png")
 knitr::include_graphics(here("00_analysis/figures/manhattan_genomewide_z_log10_pi_ratio_excl_x.png"))
 
 ```
-
 
 ### Genes in outlier regions
 
@@ -1124,6 +1264,18 @@ outliers_dam <- c(lev1_bottom_regions, lev2_near_lev1_bottom_regions) # dam: ver
 
 ```
 
+Outliers (sire) are found in most chromosomes except for chr 2, 5, 9, 12 and 17.
+
+```{r}
+outliers_sire %>% reduce(min.gapwidth = 1) %>% as_tibble() %>% group_by(seqnames) %>% summarise(n_intervals = n())
+```
+
+Outliers (dam) are found in most chromosomes except for chr 2, 10, 11, 12, 17 and 18.
+
+```{r}
+outliers_dam %>% reduce(min.gapwidth = 1) %>% as_tibble() %>% group_by(seqnames) %>% summarise(n_intervals = n())
+```
+
 ```{r find_genes, include=FALSE} 
 
 genes_outliers_sire <- subsetByOverlaps(ssc_gene_set, outliers_sire, maxgap = 50000)
@@ -1143,7 +1295,15 @@ Recall that pi-ratio is dam/sire. Values above 1 indicate lower diversity in sir
 
 genes_outliers_dam %>% 
   as_tibble() %>% 
-  DT::datatable(rownames = FALSE, options = list(pageLength = 20))
+    # add gene description
+  inner_join(
+    ssc_gene_set_with_descr %>% 
+      dplyr::select(gene_id, description) %>% 
+      dplyr::rename(gene_description = description), 
+    by = "gene_id"
+  ) %>% 
+  arrange(seqnames, start, end) %>% 
+  DT::datatable(rownames = FALSE, options = list(pageLength = 5))
 
 ```
 
@@ -1153,182 +1313,21 @@ genes_outliers_dam %>%
 
 genes_outliers_sire %>% 
   as_tibble() %>% 
-  DT::datatable(rownames = FALSE, options = list(pageLength = 20))
-
-```
-
-### Enrichment Analysis - ssc gene ids
-
-Enrichment analyis was done by splitting genes by dam (bottom outliers) or sire genes (upper outliers).
-
-There were not many significant results (FDR < 0.1). 
-
-*"Nitrogen metabolism"* was significantly enriched for the *"dam gene list"*. 
-
-Another term that came up as significant was *"T cell receptor signaling pathway"* and *"Cell adhesion molecules (CAMs)"* for the list of genes in regions with lower diversity in sires than in dams.
-
-```{r function_run_WebGestaltR, eval = FALSE} 
-#---------------------------
-# function_run_WebGestaltR
-#---------------------------
-
-run_WebGestaltR <- function(
-  interestGene, # vector of genes as input
-  projectName, # the suffix to which "Project_" is appended
-  enrichDatabase, # the data base to query  
-  outputDirectory # where to store the results
-  ){
-  res <- WebGestaltR(
-    enrichDatabase = enrichDatabase,
-    enrichMethod = "ORA",
-    organism = "sscrofa",
-    interestGene = interestGene,
-    interestGeneType = "ensembl_gene_id",
-    referenceSet = "genome",
-    sigMethod = "fdr",
-    fdrMethod = "BH",
-    fdrThr = 0.1,
-    topThr = 100,
-    reportNum = 20,
-    isOutput = TRUE,
-    outputDirectory = outputDirectory,
-    hostName = "http://www.webgestalt.org/",
-    projectName = projectName
-  )
-  
-  write.csv(
-    res, 
-    file.path(outputDirectory,paste0("Project_", projectName), paste0(enrichDatabase,"_sig_results.csv"))
-  )
-}
-
-run_WebGestaltR_hsa <- function(
-  interestGene, # vector of genes as input
-  projectName, # the suffix to which "Project_" is appended
-  enrichDatabase, # the data base to query  
-  outputDirectory # where to store the results
-  ){
-  res <- WebGestaltR(
-    enrichDatabase = enrichDatabase,
-    enrichMethod = "ORA",
-    organism = "hsapiens",
-    interestGene = interestGene,
-    interestGeneType = "ensembl_gene_id",
-    referenceSet = "genome",
-    sigMethod = "fdr",
-    fdrMethod = "BH",
-    fdrThr = 0.1,
-    topThr = 100,
-    reportNum = 20,
-    isOutput = TRUE,
-    outputDirectory = outputDirectory,
-    hostName = "http://www.webgestalt.org/",
-    projectName = projectName
-  )
-  
-  write.csv(
-    res, 
-    file.path(outputDirectory,paste0("Project_", projectName), paste0(enrichDatabase,"_sig_results.csv"))
-  )
-}
-
-```
-
-```{r run_WebGestaltR_dam_genes, eval = FALSE}
-gns <- genes_outliers_dam$gene_id
-
-run_WebGestaltR(
-  interestGene=gns,
-  projectName="WebGestaltR_pi_ratio",
-  enrichDatabase="geneontology_Biological_Process",
-  outputDirectory=here("00_analysis/data/webgestalt_pi_ratio/GOBP_dam_genes")
-)
-
-
-run_WebGestaltR(
-  interestGene=gns,
-  projectName="WebGestaltR_pi_ratio",
-  enrichDatabase="pathway_KEGG",
-  outputDirectory=here("00_analysis/data/webgestalt_pi_ratio/KEGG_dam_genes")
-) #sig
-
-```
-
-```{r display_signif_results_dam_kegg}
-
-here("00_analysis/data/webgestalt_pi_ratio/KEGG_dam_genes/Project_WebGestaltR_pi_ratio/pathway_KEGG_sig_results.csv") %>% 
-  vroom() %>% 
-  dplyr::select(-"...1") %>% 
-  kable(caption = "Significantly enriched KEGG pathways for reduced diversity in dams")
-
-```
-
-```{r display_signif_results_dam_kegg_genes}
-here("00_analysis/data/webgestalt_pi_ratio/KEGG_dam_genes/Project_WebGestaltR_pi_ratio/pathway_KEGG_sig_results.csv") %>% 
-  vroom() %>% 
-  dplyr::select(-"...1") %>%
-  dplyr::select(description, userId) %>% 
-  group_by(description) %>% 
-  summarise(gene_id = str_split(userId, ";") %>% unlist()) %>% 
+    # add gene description
   inner_join(
     ssc_gene_set_with_descr %>% 
-      dplyr::select(gene_name, gene_id, description, gene_biotype) %>% 
+      dplyr::select(gene_id, description) %>% 
       dplyr::rename(gene_description = description), 
-    by = c("gene_id"="gene_id")
-    ) %>% 
-  kable(caption = "Genes enrichning significantly enriched pathways in dams")
-```
+    by = "gene_id"
+  ) %>% 
+  arrange(seqnames, start, end)  %>% 
+  DT::datatable(rownames = FALSE, options = list(pageLength = 5))
 
-```{r run_WebGestaltR_sire_genes, eval = FALSE}
-gns <- genes_outliers_sire$gene_id
-
-run_WebGestaltR(
-  interestGene=gns,
-  projectName="WebGestaltR_pi_ratio",
-  enrichDatabase="geneontology_Biological_Process",
-  outputDirectory=here("00_analysis/data/webgestalt_pi_ratio/GOBP_sire_genes")
-)
-
-
-run_WebGestaltR(
-  interestGene=gns,
-  projectName="WebGestaltR_pi_ratio",
-  enrichDatabase="pathway_KEGG",
-  outputDirectory=here("00_analysis/data/webgestalt_pi_ratio/KEGG_sire_genes")
-) # sig
-
-```
-
-```{r display_signif_results_sire_kegg}
-
-here("00_analysis/data/webgestalt_pi_ratio/KEGG_sire_genes/Project_WebGestaltR_pi_ratio/pathway_KEGG_sig_results.csv") %>% 
-  vroom() %>% 
-  dplyr::select(-"...1") %>% 
-  kable(caption = "Significantly enriched KEGG pathways for reduced diversity in sires")
-
-```
-
-```{r display_signif_results_sire_kegg_genes}
-here("00_analysis/data/webgestalt_pi_ratio/KEGG_sire_genes/Project_WebGestaltR_pi_ratio/pathway_KEGG_sig_results.csv") %>% 
-  vroom() %>% 
-  dplyr::select(-"...1") %>%
-  dplyr::select(description, userId) %>% 
-  group_by(description) %>% 
-  summarise(gene_id = str_split(userId, ";") %>% unlist()) %>% 
-  inner_join(
-    ssc_gene_set_with_descr %>% 
-      dplyr::select(gene_name, gene_id, description, gene_biotype) %>% 
-      dplyr::rename(gene_description = description), 
-    by = c("gene_id"="gene_id")
-    ) %>% 
-  kable(caption = "Genes enrichning significantly enriched pathways in sires")
 ```
 
 ### Enrichment Analysis - hsa orthologs
 
-Outlier pig genes were mapped to their human orthologous and a new instance of WebGestalt was executed. 
-
-Same results were obtained as when ssc gene ids were used.
+Outlier pig genes were mapped to their human orthologous and WebGestalt was executed. 
 
 ```{r transform_ssc_to_hsa_ids, include=FALSE, eval = FALSE}
 
@@ -1465,4 +1464,160 @@ here("00_analysis/data/webgestalt_pi_ratio/hsa_ortho/Project_KEGG_hsa_ortho_sire
   kable(caption = "Genes enrichning significantly enriched pathways in sires")
 
 ```
+
+
+
+# Detection of overlaps with extreme regions of differentiation in mouse lines (REDs: selected vs control)
+
+This sections brings together the results obtained from mouse and pig genome analysis by comparing gene lists obtained for each species, as follows:
+
+- Mouse: genes in regions of extreme genetic differentiation with respect to the control line FZTDU. These genes can't be considered outlier-genes because most of the genome in the selected lines displays strong levels of differentiation from FZTDU. 
+
+- For pig there are three lists as shown above:
+
+  1) genes in regions of extreme genetic differention between dam (large-white and landrace) and sire (pietrain and duroc) groups.
+  
+  2) genes in regions of lower diversity in sire relative to dam.
+  
+  3) genes in regions of lower diversity in dam relative to sire.
+
+```{r transform_outlier_genes_ssc_to_mmu, eval = FALSE}
+
+ssc_outlier_genes_to_mmu <- getBM(attributes = c("ensembl_gene_id", "mmusculus_homolog_ensembl_gene"), 
+                                  filters = "ensembl_gene_id", 
+                                  values = c(genes_fst_outliers$gene_id, genes_outliers_sire$gene_id, genes_outliers_dam$gene_id) %>% unique(), 
+                                  mart = ensembl)
+
+# export for later use
+write.csv(ssc_outlier_genes_to_mmu, here("00_analysis/data","ssc_fst_piration_outlier_genes_to_mmu.csv"))
+
+```
+
+```{r read_in_mmu_orthoulogous}
+ssc_outlier_genes_to_mmu <- here("00_analysis/data","ssc_fst_piration_outlier_genes_to_mmu.csv") %>% vroom() %>% dplyr::select(-...1)
+```
+
+### Regions of genetic differentiation (dam vs sire) x REDs
+```{r}
+
+lapply(c("DUK","DUC","DU6","DU6P","DUhLB"), function(du_line){
+  
+  res <- genes_fst_outliers %>% 
+    as_tibble() %>% 
+    dplyr::select(-seqnames, -start,-end,-width,-strand) %>% # remove unnecesary columns
+    # add mmu orthologous
+    inner_join(ssc_outlier_genes_to_mmu, by = c("gene_id"="ensembl_gene_id")) %>% 
+    # remove ssc genes without orthologous ids in mmu
+    filter(!is.na(mmusculus_homolog_ensembl_gene)) %>%
+    # keep outlier genes found in REDs
+    semi_join(
+      # import RED genes for DU line
+      here("../../../projekte_I2-SOS-FERT/GitHub/WGS_analysis_mmu/00_dashboard/data/RED_genes", paste0("RED_genes_",du_line,".csv")) %>% 
+        vroom() %>% 
+        # remove unnecessary columns
+        dplyr::select(contrast, ensembl_gene_id, mgi_symbol),
+      by = c("mmusculus_homolog_ensembl_gene"="ensembl_gene_id"),
+      suffix = c("_ssc", "_mmu")
+    ) %>% 
+    # add DU contrast
+    mutate(DU_contrast = paste0(du_line, "_vs_", "FZTDU"))
+  
+  # print a useful message
+  if(nrow(res) == 0){
+    paste0("There are no overlaps for ", du_line)
+    }else{
+      res %>% knitr::kable()
+      }
+  })
+
+```
+
+There were overlaps for the fertility lines DUK and DUC, plus DUhLB. 
+
+Gene liests (RED-genes) for DU6 and DU6P did not overlap with genes in regions of extreme differentiation between dam and sire.
+
+The genes SMIM31 and CDK14 were found in both fertility lines. The later participates in "Wnt signaling pathway", part of folliculogenesis.
+
+Overlapping genes with DUhLB correspond to an inflammatory gene (TNIP3) and NDNF, associated to multiple processes such as angiogenesis and neuron function.
+
+### Regions of reduced diversity (dam vs sire) x REDs
+
+#### Reduced diversity in sire group
+```{r}
+
+lapply(c("DUK","DUC","DU6","DU6P","DUhLB"), function(du_line){
+  
+  res <- genes_outliers_sire %>% 
+    as_tibble() %>% 
+    dplyr::select(-seqnames, -start,-end,-width,-strand) %>% # remove unnecesary columns
+    # add mmu orthologous
+    inner_join(ssc_outlier_genes_to_mmu, by = c("gene_id"="ensembl_gene_id")) %>% 
+    # remove ssc genes without orthologous ids in mmu
+    filter(!is.na(mmusculus_homolog_ensembl_gene)) %>%
+    # keep outlier genes found in REDs
+    semi_join(
+      # import RED genes for DU line
+      here("../../../projekte_I2-SOS-FERT/GitHub/WGS_analysis_mmu/00_dashboard/data/RED_genes", paste0("RED_genes_",du_line,".csv")) %>% 
+        vroom() %>% 
+        # remove unnecessary columns
+        dplyr::select(contrast, ensembl_gene_id, mgi_symbol),
+      by = c("mmusculus_homolog_ensembl_gene"="ensembl_gene_id"),
+      suffix = c("_ssc", "_mmu")
+    ) %>% 
+    # add DU contrast
+    mutate(DU_contrast = paste0(du_line, "_vs_", "FZTDU"))
+  
+  # print a useful message
+  if(nrow(res) == 0){
+    paste0("There are no overlaps for ", du_line)
+    }else{
+      res %>% knitr::kable()
+      }
+  })
+
+```
+
+Only one hit was returned for DUK-genes and the gene GPC6 (gene symbol was probably added in later versions of ensembl 95). This gene has unspecific ontologies (i.e. cell migration).
+
+
+
+#### Reduced diversity in dam group
+
+```{r}
+
+lapply(c("DUK","DUC","DU6","DU6P","DUhLB"), function(du_line){
+  
+  res <- genes_outliers_dam %>% 
+    as_tibble() %>% 
+    dplyr::select(-seqnames, -start,-end,-width,-strand) %>% # remove unnecesary columns
+    # add mmu orthologous
+    inner_join(ssc_outlier_genes_to_mmu, by = c("gene_id"="ensembl_gene_id")) %>% 
+    # remove ssc genes without orthologous ids in mmu
+    filter(!is.na(mmusculus_homolog_ensembl_gene)) %>%
+    # keep outlier genes found in REDs
+    semi_join(
+      # import RED genes for DU line
+      here("../../../projekte_I2-SOS-FERT/GitHub/WGS_analysis_mmu/00_dashboard/data/RED_genes", paste0("RED_genes_",du_line,".csv")) %>% 
+        vroom() %>% 
+        # remove unnecessary columns
+        dplyr::select(contrast, ensembl_gene_id, mgi_symbol),
+      by = c("mmusculus_homolog_ensembl_gene"="ensembl_gene_id"),
+      suffix = c("_ssc", "_mmu")
+    ) %>% 
+    # add DU contrast
+    mutate(DU_contrast = paste0(du_line, "_vs_", "FZTDU"))
+  
+  # print a useful message
+  if(nrow(res) == 0){
+    paste0("There are no overlaps for ", du_line)
+    }else{
+      res %>% knitr::kable()
+      }
+  })
+
+
+```
+
+Overlaps occured for DUK-genes, DU6P-genes and DUhLB-genes only but genes are not very interesting in terms of reproduction and muscle growth.
+
 

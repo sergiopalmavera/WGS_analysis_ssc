@@ -1,0 +1,57 @@
+---
+title: "Intersection between (RED genes DU mouse) x (Fst Outliers genes SOSFERT pig)"
+output: 
+  html_document:
+    toc: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(tidyverse)
+library(here)
+library(vroom)
+```
+
+```{r import_ssc_to_mmu_orthologous_ids, include=FALSE}
+
+ssc_outlier_genes_to_mmu <- here("00_analysis/data", "SOSFERT_samples_FST_analysis_genes_outliers_ssc_to_mmu.csv") %>% 
+  read.csv() %>% dplyr::select(-X) %>% as_tibble() %>% 
+  dplyr::rename(ensembl_gene_id_ssc = ensembl_gene_id)
+
+```
+
+# Overlap ssc Fst outlier genes and RED mmu genes 
+
+ssc-outliers: regions of extreme genetic differentiation between Large-White vs Pietrain (SOSFERT samples: 10 vs 10).
+
+mmu-REDs: regions of extreme genetic differentiation (selected mouse lines vs control line). Regions in 99th percentiles plus adjacent 95th percentile regions.
+
+```{r overlaps_with_RED_DU_genes, include=TRUE}
+
+lapply(c("DUK","DUC","DU6","DU6P","DUhLB"), function(du_line){
+  
+  # import DU RDD genes
+  res <- here("../../../projekte_I2-SOS-FERT/GitHub/WGS_analysis_mmu/00_dashboard/data/RED_genes", paste0("RED_genes_",du_line,".csv")) %>% 
+    read.csv() %>% dplyr::select(-X) %>% as_tibble() %>% 
+    dplyr::rename(ensembl_gene_id_mmu = ensembl_gene_id) %>% 
+    # inner join with ssc outliers fst
+    inner_join(ssc_outlier_genes_to_mmu, 
+               by = c("ensembl_gene_id_mmu" = "mmusculus_homolog_ensembl_gene"))
+  
+  if(nrow(res) == 0){
+    paste0("There are no overlaps for ", du_line)
+  }else{
+    res %>% 
+      dplyr::select(-seqnames, -start, -end, -width, -strand, -GOBP) %>% 
+      knitr::kable()
+  }
+  
+})
+
+```
+
+The only overlaps occured for DUC and DU6, same gene for each ("SRSF3 - serine and arginine rich splicing factor 3 "). 
+
+The gene is involved in "mRNA export from nucleus", "regulation of mRNA splicing, via spliceosome" and "cellular response to leukemia inhibitory factor".
+

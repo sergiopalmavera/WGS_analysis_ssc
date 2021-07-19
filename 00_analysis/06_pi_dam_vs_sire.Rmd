@@ -14,6 +14,7 @@ library(magrittr)
 library(ggplot2)
 library(GenomicRanges)
 library(WebGestaltR)
+library(magrittr)
 ```
 
 ```{r windows_to_work_with, include=FALSE}
@@ -230,8 +231,6 @@ lev2_bottom_regions <-  pi_dat %>%
   # merge adjacent outliers
   reduce(min.gapwidth = 1)
 
-
-
 # keep top lev2 windows adjacent to lev1
 lev2_near_lev1_bottom_regions <- subsetByOverlaps(lev2_bottom_regions, lev1_bottom_regions, maxgap = 0)
 
@@ -253,8 +252,6 @@ genes_outliers_sire %>% as_tibble() %>% write.csv(here("00_analysis/data/genes_o
 
 genes_outliers_dam %>% as_tibble() %>% write.csv(here("00_analysis/data/genes_outliers_dam_pi_ratio.csv"))
 ```
-
-
 
 There are `r genes_outliers_sire %>% length()` genes in upper (lower diversity in sire group) outlier regions (maxgap 50Kb).
 
@@ -284,7 +281,7 @@ genes_outliers_sire %>%
 
 ### Enrichment Analysis
 
-Enrichment analyis was done using all `r c(genes_outliers_dam, genes_outliers_sire) %>% length()` genes and then by spliting genes by dam (bottom outliers) or sire genes (upper outliers).
+Enrichment analyis was done using all `r c(genes_outliers_dam, genes_outliers_sire) %>% length()` genes and then by splitting genes by dam (bottom outliers) or sire genes (upper outliers).
 
 There were not many significant results (FDR < 0.1). "Nitrogen metabolism" was significantly enriched for combined lists (KEGG) and later on for the *"dam gene list"*, indicating that genes with lower diversity in the dam group were the ones producing the enrichment. Another term that came up as significant was *"T cell receptor signaling pathway"* and *"Cell adhesion molecules (CAMs)"* for the list of genes in regions with lower diversity in sires than in dams.
 
