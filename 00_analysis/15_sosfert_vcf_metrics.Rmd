@@ -79,6 +79,32 @@ cohort_vcf_metrics_detail %>%
 
 ```
 
+# Genotype Depth
+```{r import_DP_file, eval = FALSE}
+memory.limit(size = 2000000)
+
+here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_DP.tab") %>% 
+  vroom(col_names = FALSE) %>% 
+  #remove extra column
+  dplyr::select(-X21) %>% 
+  # add sample names as in vcf
+  magrittr::set_colnames(
+    here("10_FinalVCF/scripts/26_extract_SOSFERT_vcf_sample_names.out") %>% vroom() %>% dplyr::select(starts_with("H")) %>% names()
+  ) %>% 
+  reshape2::melt(variable.name = "sample_id", value.name = "DP") %>% 
+  group_by(sample_id) %>% summarise(q1 = quantile(DP, 0.01), min = min(DP), max = max(DP), mean = mean(DP), median = median(DP)) %>% 
+  write.csv(here("00_analysis/data/SOSFERT_VCF_DP_per_sample_summary.csv"))
+
+```
+
+## Summary depth per sample
+```{r summarise_DP_by_sample}
+
+vroom(here("00_analysis/data/SOSFERT_VCF_DP_per_sample_summary.csv")) %>% dplyr::select(-"...1") %>% kable()
+
+```
+
+
 # Common and Private SNPs
 
 ## Number of shared SNPs
