@@ -1,0 +1,288 @@
+---
+title: "Genome analysis dam vs sire lines"
+output: 
+  html_document:
+    toc: 5
+---
+
+```{r libraries, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+
+library(vroom)
+library(tidyverse)
+library(GenomicRanges)
+library(here)
+library(knitr)
+
+```
+
+```{r sample_info, include=FALSE}
+sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv"))
+
+```
+
+
+# Intro
+
+Runs of homozygosity were computed for each sample of the SOSFERT sample set, using bcftools.
+
+These samples were sequenced at high coverage of around 50x, so the VCF file had ~15M SNPs. These were used to compute ROH.
+
+For more details check the corresponding script: in ~/12_LD_ROH/scripts/12_bcftools_ROH_SOSFERT_vcf.sh
+
+```{r ROH_import_regions, include=FALSE}
+
+roh_dat <- vroom(here("12_LD_ROH/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.roh.table"), 
+                 col_types = c(`[3]Chromosome`="c")) %>% 
+  dplyr::rename(RG = `# RG`, sample = `[2]Sample`, chr = `[3]Chromosome`, start = `[4]Start`, end = `[5]End`, length_bp = `[6]Length (bp)`,
+                n_markers = `[7]Number of markers`, qual_avg_fwd_bwd_phred = `[8]Quality (average fwd-bwd phred score)`) %>% 
+  filter(RG != "# RG") %>% 
+  # exclude x-chrom
+  filter(chr != "X") %>% 
+  inner_join(
+    
+    # include an ordered-naming for later when plotting all samples together (i.e. boxplot)
+    sample_info %>% 
+      filter(project == "SOSFERT") %>% 
+      group_by(breed) %>% 
+      mutate(breed = ifelse(breed == "Pietrain", "PI", breed),
+             breed = ifelse(breed == "Large White", "LW", breed)) %>% 
+      arrange(breed, sample_id), 
+
+    by = c("sample" = "sample_id")
+    )
+
+
+dim(roh_dat) # 100140     10
+```
+
+```{r classify_rohs}
+# Based on: "ROHs were separated into three size classes: 1) small (<100 Kbp), 2) medium (0.1 to 5 Mbp) and 3) large (>5 Mbp). "
+# PLoS Genet. 2012;8(11):e1003100. doi: 10.1371/journal.pgen.1003100. Epub 2012 Nov 29. Regions of homozygosity in the porcine genome: consequence of demography and the recombination landscape
+roh_dat_incl_class <- roh_dat %>% 
+  mutate(roh_class = ifelse(length_bp < 1e5, "short", NA),
+         roh_class = ifelse(length_bp >= 1e5 & length_bp <= 5e6, "medium", roh_class),
+         roh_class = ifelse(length_bp > 5e6, "large", roh_class),
+         roh_class = factor(roh_class, levels = c("short", "medium", "large")))
+
+```
+
+# ROH number and size summary
+```{r roh_number_size_summary}
+
+roh_dat_incl_class %>%
+  group_by(breed, roh_class) %>% 
+  summarise(n = n(), min_len = min(length_bp), max_len = max(length_bp)) %>% 
+  arrange(roh_class, breed) %>% 
+  kable(format.args = list(big.mark = ","))
+  
+
+```
+
+
+# ROH length distribution by ROH-class
+Based on: "ROHs were separated into three size classes: 1) small (<100 Kbp), 2) medium (0.1 to 5 Mbp) and 3) large (>5 Mbp). "
+PLoS Genet. 2012;8(11):e1003100. doi: 10.1371/journal.pgen.1003100. Epub 2012 Nov 29. Regions of homozygosity in the porcine genome: consequence of demography and the recombination landscape
+
+```{r roh_length_boxplots, fig.width=10}
+
+roh_dat_incl_class %>% 
+  ggplot(aes(x = length_bp, y = sample)) +
+    geom_boxplot() +
+    facet_grid(breed ~ roh_class, scales = "free") +
+    theme_bw() +
+    scale_x_continuous(breaks = scales::pretty_breaks(5)) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+
+```
+
+# Number of roh per class in each sample
+
+```{r summarise_roh_counts}
+
+roh_dat_incl_class %>% 
+  group_by(sample,breed,roh_class) %>% 
+  summarise(n=n()) %>% 
+  reshape2::dcast(breed+sample ~ roh_class, value.var = "n") %>% 
+  kable()
+  
+```
+
+# Agreggate lengths (bp) of roh per class in each sample
+```{r summarise_roh_aggreg_len}
+
+roh_dat_incl_class %>% 
+  group_by(sample,breed,roh_class) %>% 
+  summarise(total_length=sum(length_bp)) %>% 
+  reshape2::dcast(breed+sample ~ roh_class, value.var = "total_length") %>% 
+  kable(format.args = list(big.mark = ","))
+
+```
+
+# Total fraction of genome in ROH (FROH)
+
+The length of the genome covered by SNPs (denominator) is the result of:
+"summing the distance between the first and the last available consecutive SNP on each chromosomal arm for each of the 22 autosomes" https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4573243/
+
+Unfortunately, for pig centromeres are not mapped. The next best thing is to ignore per-arm territory and use the territory covered by all SNPs in the chromosome. 
+
+```{r snp_territory}
+
+genome_length <- here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.frq") %>% 
+  vroom(col_select = c("CHROM","POS")) %>% 
+  filter(CHROM %in% 1:18) %>% 
+  group_by(CHROM) %>%
+  summarise(territory_bp = max(POS) - min(POS) ) %>% 
+  ungroup() %>% 
+  summarise(territory_bp = sum(territory_bp)) %>% 
+  as.numeric()
+  
+```
+
+```{r}
+
+len_assembly <- here("ref_ensemble95/Sus_scrofa.Sscrofa11.1.dna.toplevel.fa.fai") %>% vroom(col_names = FALSE) %>% summarise(sum(X2))
+
+len_assembly_autosomes <- here("ref_ensemble95/Sus_scrofa.Sscrofa11.1.dna.toplevel.fa.fai") %>% 
+  vroom(col_names = FALSE) %>% 
+  filter(X1 %in% c(1:18)) %>% 
+  summarise(sum(X2))
+
+```
+
+The genome length covered by SNPs (autosomes only) is `r genome_length`, whereas the length of the whole pig assembly is `r len_assembly`, only autosomes: `r len_assembly_autosomes`
+
+
+```{r bp_in_roh_and_FROH_by_sample}
+
+roh_dat_incl_class %>% 
+  group_by(sample,breed) %>% 
+  summarise(total_length_bp=sum(length_bp)) %>% 
+  mutate(FROH = total_length_bp/genome_length) %>% 
+  reshape2::melt(id.vars = c("sample","breed"), meassure.vars = c("total_length_bp", "FROH")) %>% 
+  ggplot(aes(x = sample, y = value)) +
+    geom_bar(stat = "identity") +
+    facet_grid(variable ~ breed, scales = "free") +
+    theme_bw(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(10)) +
+    ylab(NULL) + 
+    xlab(NULL)
+
+```
+
+
+```{r per_sample_avg_genome_prop_as_roh} 
+
+# get genomic fraction
+roh_dat_incl_class_genome_fraction <- roh_dat_incl_class %>% 
+  mutate(genome_fraction = length_bp/genome_length)
+
+# get total fraction per sample
+total <- roh_dat_incl_class_genome_fraction %>% 
+  group_by(breed, sample) %>% 
+  summarise(total = sum(genome_fraction)) %>% 
+  mutate(roh_class = "total") %>% 
+  dplyr::select(breed, sample, roh_class, total)
+
+# get total fraction by class per sample
+total_by_class <- roh_dat_incl_class_genome_fraction %>% 
+  group_by(breed, sample, roh_class) %>% 
+  summarise(total = sum(genome_fraction))
+
+# combine data
+fractions <- bind_rows(total, total_by_class) %>% 
+  #summarise by breed and class
+  group_by(breed, roh_class) %>% 
+  summarise(n(), mean = mean(total), sd = sd(total)) %>% 
+  # add length of roh for reference
+  mutate(
+    roh_class = ifelse(roh_class == "large", "large (>5Mb)", roh_class),
+    roh_class = ifelse(roh_class == "medium", "medium (100Kb-5Mb)", roh_class),
+    roh_class = ifelse(roh_class == "short", "short (<100Kb)", roh_class)
+  ) %>% 
+  # arrange levels for plot
+  mutate(roh_class = factor(roh_class, levels = c("total","short (<100Kb)", "medium (100Kb-5Mb)", "large (>5Mb)")))
+
+
+errors_lower <- fractions$mean - fractions$sd
+errors_upper <- fractions$mean + fractions$sd
+
+ggplot(fractions, aes(x = breed, y = mean, fill = roh_class)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = errors_lower, ymax = errors_upper), position =  position_dodge2(width = 0.5, padding = 0.5)) +
+  theme_bw(base_size = 12) +
+  xlab(NULL) +
+  ylab("FROH") +
+  ggtitle("Mean FROH per breed per ROH class") +
+  scale_fill_brewer(palette="Dark2") +
+  scale_y_continuous(breaks = seq(0,1,0.05), expand = c(0.01,0.01)) +
+  theme(legend.title = element_blank(), plot.title = element_text(hjust = 0.5))
+
+```
+
+# Analyisis of breed-consensus private ROHs
+
+- Within breed common ROHs (breed-consensus) were detected using bedtools (see script: "./12_LD_ROH/scripts/14_bedtools_multiIntersectBed.sh").
+
+- Based on biostars post: https://www.biostars.org/p/15303/
+
+- ROHs are transformed to BED files for bedtools, afterwards intervals were reconverted into 1-start-fully-closed intervals.
+
+- For more information see https://genome-blog.soe.ucsc.edu/blog/2016/12/12/the-ucsc-genome-browser-coordinate-counting-systems/
+
+```{r transform_to_bed, eval=FALSE}
+
+roh_dat_incl_class$sample %>% 
+  unique() %>% 
+  lapply(function(s){
+    
+    d <- roh_dat_incl_class %>% 
+      filter(sample == s) %>% 
+      # to transform to bed, substract 1bp to start only. end stays the same.
+      mutate(start = start - 1) 
+    
+    breed <- unique(d$breed) %>% unique()
+    
+    fl_nm <- paste0(breed,"_",s,".bed")
+    
+    d %>% 
+      dplyr::select(chr, start, end) %>% 
+      arrange(chr, start) %>% 
+      write.table(file = here("00_analysis/data/bed_files_ROH",fl_nm), sep = "\t", quote = FALSE, col.names = FALSE, row.names = FALSE)
+  })
+
+```
+
+```{r import_bed_intersections}
+
+roh_multint_dat <- here("12_LD_ROH/output/SOSFERT_ROH_intersections.bed") %>% 
+  vroom(col_names = FALSE) %>% 
+  dplyr::rename(seqnames=X1, start=X2, end=X3) %>% 
+  # do not forget to convert back to 1-start-fully-closed format
+  # just add 1bp to start
+  mutate(start = start + 1) 
+
+
+breed_cts <- roh_multint_dat$X5 %>% 
+  str_split(",") %>% 
+  lapply(function(x) str_sub(string = x, start = 1,end = 2)) %>% 
+  lapply(function(x){
+    data.frame(LW = sum(x == "LW"), PI = sum(x == "PI"))
+  }) %>% 
+  bind_rows()
+  
+roh_multint_dat2 <- bind_cols(
+  
+  roh_multint_dat %>% dplyr::select(seqnames, start, end),
+  
+  breed_cts
+) 
+
+
+roh_multint_dat2 %>% filter(LW >= 6, PI == 0)
+
+roh_multint_dat2 %>% filter(LW == 0, PI >= 6)
+```
+
+
