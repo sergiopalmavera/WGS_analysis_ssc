@@ -119,6 +119,38 @@ roh_dat_incl_class %>%
 
 ```
 
+```{r vis_aggreagate_lengths}
+
+roh_dat_incl_class %>% 
+  group_by(breed, sample, roh_class) %>% 
+  summarise(total_bp = sum(length_bp)) %>% 
+  ungroup() %>% 
+  group_by(breed, roh_class) %>% 
+  summarise(mean = mean(total_bp/1e6), sd = sd(total_bp/1e6)) %>% 
+  # add length of roh for reference
+  mutate(
+    roh_class = as.character(roh_class),
+    roh_class = ifelse(roh_class == "large", "large (>5Mb)", roh_class),
+    roh_class = ifelse(roh_class == "medium", "medium (100Kb-5Mb)", roh_class),
+    roh_class = ifelse(roh_class == "short", "short (<100Kb)", roh_class),
+    roh_class = factor(roh_class, levels = c("total","short (<100Kb)", "medium (100Kb-5Mb)", "large (>5Mb)"))
+  ) %>% 
+  ggplot(aes(x = breed, y = mean, fill = roh_class)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    #geom_bar(stat = "identity", position = "stack") +
+    geom_errorbar(aes(ymin = mean-sd, ymax = mean+sd), position =  position_dodge2(width = 0.5, padding = 0.5)) +
+    theme_bw(base_size = 12) +
+    xlab(NULL) +
+    ylab("Mbp (mean +/- sd)") +
+    ggtitle("Genome in ROH") +
+    scale_fill_brewer(palette="Dark2") +
+    scale_y_continuous(breaks = scales::pretty_breaks(10)) +
+    theme(legend.title = element_blank(), plot.title = element_text(hjust = 0.5))
+
+
+```
+
+
 # Total fraction of genome in ROH (FROH)
 
 The length of the genome covered by SNPs (denominator) is the result of:
@@ -132,14 +164,14 @@ genome_length <- here("10_FinalVCF/output/cohort_biallelicSNPs_HardFiltered_With
   vroom(col_select = c("CHROM","POS")) %>% 
   filter(CHROM %in% 1:18) %>% 
   group_by(CHROM) %>%
-  summarise(territory_bp = max(POS) - min(POS) ) %>% 
+  summarise(territory_bp = (max(POS) - min(POS))+1 ) %>% 
   ungroup() %>% 
   summarise(territory_bp = sum(territory_bp)) %>% 
   as.numeric()
   
 ```
 
-```{r}
+```{r chr_len}
 
 len_assembly <- here("ref_ensemble95/Sus_scrofa.Sscrofa11.1.dna.toplevel.fa.fai") %>% vroom(col_names = FALSE) %>% summarise(sum(X2))
 
@@ -213,7 +245,7 @@ ggplot(fractions, aes(x = breed, y = mean, fill = roh_class)) +
   geom_errorbar(aes(ymin = errors_lower, ymax = errors_upper), position =  position_dodge2(width = 0.5, padding = 0.5)) +
   theme_bw(base_size = 12) +
   xlab(NULL) +
-  ylab("FROH") +
+  ylab("FROH (mean +/- sd)") +
   ggtitle("Mean FROH per breed per ROH class") +
   scale_fill_brewer(palette="Dark2") +
   scale_y_continuous(breaks = seq(0,1,0.05), expand = c(0.01,0.01)) +
@@ -221,7 +253,7 @@ ggplot(fractions, aes(x = breed, y = mean, fill = roh_class)) +
 
 ```
 
-# Analyisis of breed-consensus private ROHs
+# Private and shared ROHs
 
 - Within breed common ROHs (breed-consensus) were detected using bedtools (see script: "./12_LD_ROH/scripts/14_bedtools_multiIntersectBed.sh").
 
@@ -254,15 +286,17 @@ roh_dat_incl_class$sample %>%
 
 ```
 
-```{r import_bed_intersections}
-
+```{r import_bed_and_count_intersections}
 roh_multint_dat <- here("12_LD_ROH/output/SOSFERT_ROH_intersections.bed") %>% 
   vroom(col_names = FALSE) %>% 
   dplyr::rename(seqnames=X1, start=X2, end=X3) %>% 
   # do not forget to convert back to 1-start-fully-closed format
   # just add 1bp to start
   mutate(start = start + 1) 
+```
 
+
+```{r process_bed_and_count_intersections, eval = FALSE}
 
 breed_cts <- roh_multint_dat$X5 %>% 
   str_split(",") %>% 
@@ -279,10 +313,235 @@ roh_multint_dat2 <- bind_cols(
   breed_cts
 ) 
 
+write.csv(x = roh_multint_dat2, file = here("00_analysis/data/roh_intersections.csv"))
 
-roh_multint_dat2 %>% filter(LW >= 6, PI == 0)
+rm(roh_multint_dat, breed_cts, roh_multint_dat2)
 
-roh_multint_dat2 %>% filter(LW == 0, PI >= 6)
 ```
 
+
+```{r import_intersections}
+roh_multint_dat2 <- here("00_analysis/data/roh_intersections.csv") %>% vroom() %>% dplyr::select(-"...1")
+```
+
+## Breed-private consensus ROH
+
+```{r vis_bp_private_consensus_roh}
+
+total_bp_private_LW <- roh_multint_dat2 %>% 
+  filter(LW > 0, PI == 0) %>% 
+  mutate(length = (end-start)+1) %>% 
+  group_by(LW) %>% 
+  summarise(bp_roh = sum(length)) %>% 
+  dplyr::rename(n_samples = LW)
+  
+total_bp_private_PI <- roh_multint_dat2 %>% 
+  filter(LW == 0, PI > 0) %>% 
+  mutate(length = (end-start)+1) %>% 
+  group_by(PI) %>% 
+  summarise(bp_roh = sum(length)) %>% 
+  dplyr::rename(n_samples = PI)
+
+dat_vis_private <- list(bp_private_LW = total_bp_private_LW,
+     bp_private_PI= total_bp_private_PI) %>% 
+  bind_rows(.id="data_set") %>% 
+  mutate(intersection_class = ifelse(n_samples <= 5, "1-5", "6-10")) %>% 
+  reshape2::melt(id.vars = c("data_set", "n_samples", "bp_roh")) %>% 
+  arrange(data_set, desc(n_samples)) %>% 
+  group_by(data_set) %>% 
+  mutate(cumsum = cumsum(bp_roh)) 
+
+```
+
+```{r tabulate_private_roh_bps_in_at_least_n_samples}
+
+dat_vis_private %>% 
+  reshape2::dcast(n_samples ~ data_set, value.var = "cumsum") %>% 
+  dplyr::rename(min_no_samples = n_samples) %>% 
+  kable(format.args = list(big.mark = ","), caption = "Total breed-private bp in ROH in at least n samples")
+
+```
+
+## Shared ROHs between LW and PI
+
+```{r vis_shared_roh_bps_in_at_least_n_samples}
+
+dat_vis_shared <- lapply(1:10, function(i){
+  
+  roh_multint_dat2 %>% 
+    filter(LW == i & PI == i) %>% 
+    mutate(n_samples = LW + PI,
+           samples_per_breed = i) 
+  
+  }) %>% 
+  bind_rows() %>% 
+  group_by(samples_per_breed) %>% 
+  mutate(length = (end-start)+1) %>% 
+  summarise(total_bp = sum(length)) %>% 
+  arrange(desc(samples_per_breed)) %>% 
+  mutate(cumsum = cumsum(total_bp)) %>%
+  mutate(intersection_class = ifelse(samples_per_breed <= 5, "1-5", "6-10"))
+  
+```
+
+```{r tabulate_shared_roh_bps_in_at_least_n_samples}
+
+dat_vis_shared %>% 
+  arrange(samples_per_breed) %>% 
+  dplyr::select(samples_per_breed, cumsum) %>% 
+  dplyr::rename(min_no_samples_per_breed = samples_per_breed, total_bp = cumsum) %>% 
+  kable(format.args = list(big.mark = ","), caption = "Total shared bp in ROH in at least n samples")
+
+```
+
+## Summary 
+
+```{r vis_private_shared_roh, fig.height=9}
+
+# private
+p1 <- dat_vis_private %>% 
+  filter(value == "1-5") %>% 
+  ggplot(aes(x = n_samples, y = cumsum/1e6)) +
+    geom_bar(stat = "identity") +
+    facet_grid(data_set~value, scales = "free") +
+    scale_x_continuous(breaks = scales::pretty_breaks(5)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(10)) +
+    theme_bw(base_size = 10) +
+    ylab("Mbp") +
+    xlab("min. no. samples")
+
+
+p2 <- dat_vis_private %>% 
+  filter(value == "6-10") %>% 
+  ggplot(aes(x = n_samples, y = cumsum/1e6)) +
+    geom_bar(stat = "identity") +
+    facet_grid(data_set~value, scales = "free") +
+    scale_x_continuous(breaks = scales::pretty_breaks(5)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(10)) +
+    theme_bw(base_size = 10) +
+    ylab("Mbp") +
+    xlab("min. no. samples")
+
+# shared
+p3 <- dat_vis_shared %>% 
+  filter(intersection_class == "1-5") %>% 
+  ggplot(aes(x = samples_per_breed, y = cumsum/1e6)) +
+    geom_bar(stat = "identity") +
+    facet_wrap(~intersection_class, scales = "free") +
+    scale_x_continuous(breaks = scales::pretty_breaks(5)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(10)) +
+    theme_bw(base_size = 10) +
+    ylab("Mbp") +
+    xlab("min. no. samples per breed")
+
+p4 <- dat_vis_shared %>% 
+  filter(intersection_class == "6-10") %>% 
+  ggplot(aes(x = samples_per_breed, y = cumsum/1e6)) +
+    geom_bar(stat = "identity") +
+    facet_wrap(~intersection_class, scales = "free") +
+    scale_x_continuous(breaks = scales::pretty_breaks(5)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(10)) +
+    theme_bw(base_size = 10) +
+    ylab("Mbp") +
+    xlab("min. no. samples per breed")
+
+p5 <- ggpubr::ggarrange(p1,p2,ncol = 2) %>% 
+  ggpubr::annotate_figure(top = "Genome in private ROH")
+
+p6 <- ggpubr::ggarrange(p3,p4,ncol = 2) %>% 
+  ggpubr::annotate_figure(top = "Genome in shared ROH")
+
+ggpubr::ggarrange(p5,p6, nrow = 2, heights = c(1.4,1))
+```
+
+# Check sample contribution at each level of consensus
+
+Min. no. samples is expected to vary along the genome. Check the overall contribution of each sample at any minimum sample required.
+
+## Contribution of samples to breed-specific ROHs
+```{r bp_sample_contribution_private_LW}
+
+cols <- c("seqnames", "start", "end", "LW_H29777", "LW_H29778", "LW_H29779", "LW_H29780", "LW_H29781", "LW_H29782", "LW_H29783", "LW_H29784", "LW_H29785", "LW_H29786", "PI_H29767", "PI_H29768", "PI_H29769", "PI_H29770", "PI_H29771", "PI_H29772", "PI_H29773", "PI_H29774", "PI_H29775", "PI_H29776")
+
+roh_multint_dat %>% 
+  dplyr::select(seqnames, start, end, X6:X25) %>% 
+  magrittr::set_colnames(cols) %>% 
+  inner_join(
+    roh_multint_dat2 %>% filter(LW > 0, PI == 0),
+    by = c("seqnames","start","end")
+  ) %>% 
+  reshape2::melt(id.vars = c("seqnames","start","end","LW","PI"), variable.name = "sample_id") %>% 
+  as_tibble() %>% 
+  filter(value > 0) %>% 
+  group_by(LW, sample_id) %>% 
+  mutate(length_bp = (end-start) + 1) %>% 
+  summarise(total_Mbp = sum(length_bp)/1e6) %>% 
+  mutate(sample_id = str_remove(sample_id, "LW_")) %>% 
+  ggplot(aes(x = sample_id, y = total_Mbp)) +
+    geom_bar(stat = "identity") +
+    facet_wrap(~LW, scales = "free_y") +
+    theme_bw(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+    ggtitle("bp_sample_contribution_private_LW")
+
+```
+
+```{r bp_sample_contribution_private_PI}
+roh_multint_dat %>% 
+  dplyr::select(seqnames, start, end, X6:X25) %>% 
+  magrittr::set_colnames(cols) %>% 
+  inner_join(
+    roh_multint_dat2 %>% filter(LW == 0, PI > 0),
+    by = c("seqnames","start","end")
+  ) %>% 
+  reshape2::melt(id.vars = c("seqnames","start","end","LW","PI"), variable.name = "sample_id") %>% 
+  as_tibble() %>% 
+  filter(value > 0) %>% 
+  group_by(PI, sample_id) %>% 
+  mutate(length_bp = (end-start) + 1) %>% 
+  summarise(total_Mbp = sum(length_bp)/1e6) %>% 
+  mutate(sample_id = str_remove(sample_id, "PI_")) %>% 
+  ggplot(aes(x = sample_id, y = total_Mbp)) +
+    geom_bar(stat = "identity") +
+    facet_wrap(~PI, scales = "free_y") +
+    theme_bw(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+    ggtitle("bp_sample_contribution_private_PI")
+```
+
+```{r bp_sample_contribution_shared, fig.width=15}
+
+roh_multint_dat %>% 
+  dplyr::select(seqnames, start, end, X6:X25) %>% 
+  magrittr::set_colnames(cols) %>% 
+  inner_join(
+    
+    lapply(1:10, function(i){
+      roh_multint_dat2 %>% 
+        filter(LW == i & PI == i) %>% 
+        mutate(n_samples = LW + PI,
+               samples_per_breed = i) 
+      }) %>% 
+      bind_rows() %>% 
+      dplyr::select(-n_samples, -LW, -PI),
+    
+    by = c("seqnames","start","end")
+    
+  ) %>% 
+  reshape2::melt(id.vars = c("seqnames","start","end","samples_per_breed"), variable.name = "sample_id") %>% 
+  as_tibble() %>% 
+  filter(value > 0) %>% 
+  group_by(samples_per_breed, sample_id) %>% 
+  mutate(length_bp = (end-start) + 1) %>% 
+  summarise(total_Mbp = sum(length_bp)/1e6) %>% 
+  mutate(sample_id = str_remove(sample_id, "PI_"),
+         sample_id = str_remove(sample_id, "LW_")) %>% 
+  ggplot(aes(x = sample_id, y = total_Mbp)) +
+    geom_bar(stat = "identity") +
+    facet_wrap(~samples_per_breed, scales = "free_y") +
+    theme_bw(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+    ggtitle("bp_sample_contribution_shared")
+
+```
 
