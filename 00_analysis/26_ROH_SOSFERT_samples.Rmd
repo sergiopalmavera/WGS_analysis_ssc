@@ -1,24 +1,28 @@
 ---
-title: "Genome analysis dam vs sire lines"
+title: "ROHs analysis - SOSFERT samples"
 output: 
   html_document:
     toc: 5
+    code_folding: show
 ---
 
 ```{r libraries, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+#knitr::opts_chunk$set(echo = FALSE, include = TRUE, message = FALSE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
 
 library(vroom)
 library(tidyverse)
 library(GenomicRanges)
 library(here)
 library(knitr)
+library(biomaRt)
+library(rrvgo)
 
 ```
 
-```{r sample_info, include=FALSE}
+```{r sample_info}
 sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv"))
-
 ```
 
 
@@ -28,9 +32,9 @@ Runs of homozygosity were computed for each sample of the SOSFERT sample set, us
 
 These samples were sequenced at high coverage of around 50x, so the VCF file had ~15M SNPs. These were used to compute ROH.
 
-For more details check the corresponding script: in ~/12_LD_ROH/scripts/12_bcftools_ROH_SOSFERT_vcf.sh
+For more details check the corresponding script: in ``~/12_LD_ROH/scripts/12_bcftools_ROH_SOSFERT_vcf.sh``
 
-```{r ROH_import_regions, include=FALSE}
+```{r ROH_import_regions, results='hide'}
 
 roh_dat <- vroom(here("12_LD_ROH/output/cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.roh.table"), 
                  col_types = c(`[3]Chromosome`="c")) %>% 
@@ -204,7 +208,7 @@ roh_dat_incl_class %>%
 ```
 
 
-```{r per_sample_avg_genome_prop_as_roh} 
+```{r per_sample_avg_genome_prop_as_roh}
 
 # get genomic fraction
 roh_dat_incl_class_genome_fraction <- roh_dat_incl_class %>% 
@@ -255,7 +259,7 @@ ggplot(fractions, aes(x = breed, y = mean, fill = roh_class)) +
 
 # Private and shared ROHs
 
-- Within breed common ROHs (breed-consensus) were detected using bedtools (see script: "./12_LD_ROH/scripts/14_bedtools_multiIntersectBed.sh").
+- Within breed common ROHs (breed-consensus) were detected using bedtools (see script: ``./12_LD_ROH/scripts/14_bedtools_multiIntersectBed.sh``).
 
 - Based on biostars post: https://www.biostars.org/p/15303/
 
@@ -263,6 +267,7 @@ ggplot(fractions, aes(x = breed, y = mean, fill = roh_class)) +
 
 - For more information see https://genome-blog.soe.ucsc.edu/blog/2016/12/12/the-ucsc-genome-browser-coordinate-counting-systems/
 
+## Make a roh bed file for each sample
 ```{r transform_to_bed, eval=FALSE}
 
 roh_dat_incl_class$sample %>% 
@@ -286,6 +291,7 @@ roh_dat_incl_class$sample %>%
 
 ```
 
+## Import bedtools results
 ```{r import_bed_and_count_intersections}
 roh_multint_dat <- here("12_LD_ROH/output/SOSFERT_ROH_intersections.bed") %>% 
   vroom(col_names = FALSE) %>% 
@@ -295,7 +301,9 @@ roh_multint_dat <- here("12_LD_ROH/output/SOSFERT_ROH_intersections.bed") %>%
   mutate(start = start + 1) 
 ```
 
+## For each intersection, count samples per breed and export
 
+Computation is not quick, better do it once, then export.
 ```{r process_bed_and_count_intersections, eval = FALSE}
 
 breed_cts <- roh_multint_dat$X5 %>% 
@@ -543,5 +551,515 @@ roh_multint_dat %>%
     theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
     ggtitle("bp_sample_contribution_shared")
 
+```
+
+
+
+# Consensus from here on now: `r minN <- 8` `r minN`/10 samples.
+
+Consensus: If `r minN` out 10 samples are consistently sharing ROHs.
+
+
+```{r set_consensus_data_sets}
+
+private_LW_minN <- roh_multint_dat2 %>% filter(LW >= minN, PI == 0) 
+  
+private_PI_minN <- roh_multint_dat2 %>% filter(LW == 0, PI >= minN) 
+
+shared_LWminN_PIminN <- roh_multint_dat2 %>% filter(LW >= minN & PI >= minN)
+
+```
+
+Some consensus ROHs can occur next to each other. Merge those.
+
+```{r merge_rohs}
+
+private_LW_minN_merged <- private_LW_minN %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = TRUE) %>% 
+  reduce(min.gapwidth = 1)
+
+private_PI_minN_merged <- private_PI_minN %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = TRUE) %>% 
+  reduce(min.gapwidth = 1)
+
+shared_LWminN_PIminN_merged <- shared_LWminN_PIminN %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = TRUE) %>% 
+  reduce(min.gapwidth = 1)
+
+```
+
+## How many ROH-bases are private vs shared?
+
+```{r bp_total_private_shared}
+
+list(
+  private_LW = private_LW_minN_merged %>% as_tibble(),
+  private_PI = private_PI_minN_merged %>% as_tibble(),
+  shared = shared_LWminN_PIminN_merged %>% as_tibble()
+  ) %>% 
+  bind_rows(.id = "data_set") %>% 
+  group_by(data_set) %>% 
+  mutate(len_bp = (end-start)+1) %>% 
+  summarise(sum(len_bp)) %>% 
+  kable(format.args = list(big.mark = ","))
+
+```
+
+There are much more shared roh-bases than private roh-bases.
+
+
+## What proportion of ROHs are below 100bp? - less than 100bp might too low.
+
+```{r roh_size_distribution}
+
+list(
+  private_LW = private_LW_minN_merged %>% as_tibble(),
+  private_PI = private_PI_minN_merged %>% as_tibble(),
+  shared = shared_LWminN_PIminN_merged %>% as_tibble()
+  ) %>% 
+  bind_rows(.id = "data_set") %>% 
+  group_by(data_set) %>% 
+  mutate(len_bp = (end-start)+1, is_too_short = len_bp < 100) %>% 
+  summarise(total_too_short = sum(is_too_short), pct_too_short = mean(is_too_short)*100, min_len = min(len_bp)) %>% 
+  kable(digits = 2)
+
+```
+
+There are not too many "too short" ROHs, so I will just remove them.
+
+```{r exclude_too_short_rohs}
+
+private_LW_minN_merged_GTE100bp <- private_LW_minN_merged %>% as_tibble() %>% mutate(len_bp = (end-start)+1) %>% filter(len_bp >= 100) %>% makeGRangesFromDataFrame(keep.extra.columns = TRUE)
+
+private_PI_minN_merged_GTE100bp <- private_PI_minN_merged %>% as_tibble() %>% mutate(len_bp = (end-start)+1) %>% filter(len_bp >= 100) %>% makeGRangesFromDataFrame(keep.extra.columns = TRUE)
+
+shared_LWminN_PIminN_merged_GTE100bp <- shared_LWminN_PIminN_merged %>% as_tibble() %>% mutate(len_bp = (end-start)+1) %>% filter(len_bp >= 100) %>% makeGRangesFromDataFrame(keep.extra.columns = TRUE)
+
+```
+
+# Get genes for private and shared ROHs
+
+```{r gene_set_scc}
+
+ssc_gene_set <- readRDS(here("ref_ensemble95/gene_set/ssc_gene_set.rds"))
+
+```
+
+```{r genes_in_rohs}
+
+private_LW_minN_merged_GTE100bp_genes <- subsetByOverlaps(ssc_gene_set, private_LW_minN_merged_GTE100bp, minoverlap = 1)
+
+private_PI_minN_merged_GTE100bp_genes <- subsetByOverlaps(ssc_gene_set, private_PI_minN_merged_GTE100bp, minoverlap = 1)
+
+shared_LWminN_PIminN_merged_GTE100bp_genes <- subsetByOverlaps(ssc_gene_set, shared_LWminN_PIminN_merged_GTE100bp, minoverlap = 1)
+
+```
+
+# Summarize gene ontologies (GO-BP)
+
+The purpose of this section is to obtain an idea of the biological functions of genes in private and shared ROHs.
+
+## Obtain gene ontologies
+
+Do this one time and export.
+
+```{r setup_biomart, eval = FALSE}
+
+#ensembl <- useEnsembl(biomart = "genes", dataset = "sscrofa_gene_ensembl", version = "95")
+ensembl <- useEnsembl(biomart = "genes", dataset = "sscrofa_gene_ensembl", version = "95")
+
+get_go <- function(dd){
+  
+  #dd <- private_LW_minN_merged_GTE100bp_genes
+  
+  # get gene ontology ids
+  q <- getBM(attributes = c("ensembl_gene_id", "go_id", "name_1006", "namespace_1003", "external_gene_name"), 
+             filters = "ensembl_gene_id", 
+             values = dd$gene_id, 
+             mart = ensembl)
+  
+  res <- q %>% 
+    filter(namespace_1003 == "biological_process") %>% # retain GO_BPs
+    mutate(external_gene_name = ifelse(external_gene_name == "", NA, external_gene_name),
+           ensid_sym = paste0(ensembl_gene_id, " (",external_gene_name, ")")) %>% 
+    as_tibble() %>% 
+    dplyr::select(name_1006, ensid_sym, go_id) %>% 
+    group_by(go_id, name_1006) %>% 
+    summarise(n_genes=n(), genes = paste0(ensid_sym, collapse = "; ")) %>% # count no. genes per GO-BP
+    arrange(desc(n_genes)) %>% 
+    dplyr::rename(go_name = name_1006)
+  
+  return(res)
+
+}
+
+```
+
+```{r get_ontologies_and_export, eval = FALSE}
+
+private_LW_minN_merged_GTE100bp_genes_GOBP <- get_go(dd = private_LW_minN_merged_GTE100bp_genes)
+private_PI_minN_merged_GTE100bp_genes_GOBP <- get_go(dd = private_PI_minN_merged_GTE100bp_genes)
+shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP <- get_go(dd = shared_LWminN_PIminN_merged_GTE100bp_genes)
+
+write.csv(private_LW_minN_merged_GTE100bp_genes_GOBP,
+          here("00_analysis/data/ROH_GOBP","private_LW_minN_merged_GTE100bp_genes_GOBP.csv"))
+
+write.csv(private_PI_minN_merged_GTE100bp_genes_GOBP,
+          here("00_analysis/data/ROH_GOBP","private_PI_minN_merged_GTE100bp_genes_GOBP.csv"))
+
+write.csv(shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP,
+          here("00_analysis/data/ROH_GOBP","shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP.csv"))
+
+rm(private_LW_minN_merged_GTE100bp_genes_GOBP, private_PI_minN_merged_GTE100bp_genes_GOBP, shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP)
+```
+
+```{r import_GOBP_annotations}
+
+private_LW_minN_merged_GTE100bp_genes_GOBP <- here("00_analysis/data/ROH_GOBP","private_LW_minN_merged_GTE100bp_genes_GOBP.csv") %>% vroom()
+
+private_PI_minN_merged_GTE100bp_genes_GOBP <- here("00_analysis/data/ROH_GOBP","private_PI_minN_merged_GTE100bp_genes_GOBP.csv") %>% vroom()
+
+shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP <- here("00_analysis/data/ROH_GOBP","shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP.csv") %>% vroom()
+```
+
+
+## Summarize ontologies with rrvgo
+
+Get semantic similarities, reduce terms and export
+```{r prep_rrvgo_dat, eval = FALSE}
+
+prep_rrvgo <- function(d){
+  
+  #d <- private_LW_minN_merged_GTE100bp_genes_GOBP
+  
+  sim_ma <- calculateSimMatrix(x = d$go_id, orgdb="org.Ss.eg.db", ont="BP", method="Rel")
+  
+  scores <- setNames(d$n_genes, d$go_id)
+  
+  reduced_terms <- reduceSimMatrix(sim_ma, scores, threshold=0.7, orgdb="org.Ss.eg.db")
+  
+  res <- list(sim_ma, reduced_terms)
+  
+  names(res) <- c("sim_ma","reduced_terms")
+  
+  return(res)
+  
+  }
+
+private_LW_minN_merged_GTE100bp_genes_GOBP_rrvgo <- prep_rrvgo(private_LW_minN_merged_GTE100bp_genes_GOBP)
+private_PI_minN_merged_GTE100bp_genes_GOBP_rrvgo <- prep_rrvgo(private_PI_minN_merged_GTE100bp_genes_GOBP)
+shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP_rrvgo <- prep_rrvgo(shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP)
+
+saveRDS(private_LW_minN_merged_GTE100bp_genes_GOBP_rrvgo, 
+        here("00_analysis/data/rrvgo/private_LW_minN_merged_GTE100bp_genes_GOBP_rrvgo.rds"))
+saveRDS(private_PI_minN_merged_GTE100bp_genes_GOBP_rrvgo, 
+        here("00_analysis/data/rrvgo/private_PI_minN_merged_GTE100bp_genes_GOBP_rrvgo.rds"))
+saveRDS(shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP_rrvgo, 
+        here("00_analysis/data/rrvgo/shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP_rrvgo.rds"))
+
+rm(private_LW_minN_merged_GTE100bp_genes_GOBP_rrvgo, private_PI_minN_merged_GTE100bp_genes_GOBP_rrvgo, shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP_rrvgo)
+```
+
+```{r import_rrvgo_res}
+
+private_LW_minN_merged_GTE100bp_genes_GOBP_rrvgo <- readRDS(
+  here("00_analysis/data/rrvgo/private_LW_minN_merged_GTE100bp_genes_GOBP_rrvgo.rds")
+  )
+
+private_PI_minN_merged_GTE100bp_genes_GOBP_rrvgo <- readRDS(
+  here("00_analysis/data/rrvgo/private_PI_minN_merged_GTE100bp_genes_GOBP_rrvgo.rds")
+  )
+
+shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP_rrvgo <- readRDS(
+  here("00_analysis/data/rrvgo/shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP_rrvgo.rds")
+  )
+```
+
+
+### Large White private ROH - Gene Annotation (GO-BP)
+
+#### Tree map plot
+```{r fig.width=12, fig.height=8}
+
+treemapPlot(private_LW_minN_merged_GTE100bp_genes_GOBP_rrvgo$reduced_terms)
+
+```
+
+#### PCA semmantic simmilarity
+```{r fig.width=12, fig.height=12}
+
+scatterPlot(simMatrix = private_LW_minN_merged_GTE100bp_genes_GOBP_rrvgo$sim_ma, 
+            reducedTerms = private_LW_minN_merged_GTE100bp_genes_GOBP_rrvgo$reduced_terms)
+
+```
+
+#### Reduced Terms
+```{r}
+private_LW_minN_merged_GTE100bp_genes_GOBP_rrvgo$reduced_terms %>% 
+  group_by(parentTerm) %>% 
+  summarise(n_terms = n(), terms = paste(term, collapse = "; ")) %>% 
+  arrange(desc(n_terms)) %>% 
+  DT::datatable(rownames = FALSE)
+```
+
+#### Genes by term
+```{r}
+private_LW_minN_merged_GTE100bp_genes_GOBP %>% 
+  dplyr::select(-"...1") %>% 
+  DT::datatable(rownames = FALSE)
+```
+
+### Pietrain private ROH - Gene Annotation (GO-BP)
+
+#### Tree map plot
+```{r fig.width=12, fig.height=8}
+
+treemapPlot(private_PI_minN_merged_GTE100bp_genes_GOBP_rrvgo$reduced_terms)
+
+```
+
+#### PCA semmantic simmilarity
+```{r fig.width=12, fig.height=12}
+
+scatterPlot(simMatrix = private_PI_minN_merged_GTE100bp_genes_GOBP_rrvgo$sim_ma, 
+            reducedTerms = private_PI_minN_merged_GTE100bp_genes_GOBP_rrvgo$reduced_terms)
+
+```
+
+#### Reduced Terms
+```{r}
+private_PI_minN_merged_GTE100bp_genes_GOBP_rrvgo$reduced_terms %>% 
+  group_by(parentTerm) %>% 
+  summarise(n_terms = n(), terms = paste(term, collapse = "; ")) %>% 
+  arrange(desc(n_terms)) %>% 
+  DT::datatable(rownames = FALSE)
+```
+
+#### Genes by term
+```{r}
+private_PI_minN_merged_GTE100bp_genes_GOBP %>% 
+  dplyr::select(-"...1") %>% 
+  DT::datatable(rownames = FALSE)
+```
+
+### Shared ROH - Gene Annotation (GO-BP)
+
+#### Tree map plot
+```{r fig.width=12, fig.height=8}
+
+treemapPlot(shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP_rrvgo$reduced_terms)
+
+```
+
+#### PCA semmantic simmilarity
+```{r fig.width=12, fig.height=12}
+
+scatterPlot(simMatrix = shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP_rrvgo$sim_ma, 
+            reducedTerms = shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP_rrvgo$reduced_terms)
+
+```
+
+#### Reduced Terms
+```{r}
+shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP_rrvgo$reduced_terms %>% 
+  group_by(parentTerm) %>% 
+  summarise(n_terms = n(), terms = paste(term, collapse = "; ")) %>% 
+  arrange(desc(n_terms)) %>% 
+  DT::datatable(rownames = FALSE)
+```
+
+#### Genes by term
+```{r}
+shared_LWminN_PIminN_merged_GTE100bp_genes_GOBP %>% 
+  dplyr::select(-"...1") %>% 
+  DT::datatable(rownames = FALSE)
+```
+
+
+# What type of annotations do SNPs contained in ROHs have?
+
+## Import SNP set
+```{r eval = FALSE}
+
+# this takes a while, so run it once and then export it
+snps_in_ROH <- subsetByOverlaps(
+  
+  x = here("10_FinalVCF/output", "cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.frq") %>% 
+    vroom() %>% 
+    dplyr::select(CHROM, POS) %>% 
+    mutate(seqnames = CHROM, start = POS, end = POS) %>% 
+    dplyr::select(seqnames, start, end) %>% 
+    makeGRangesFromDataFrame(), 
+  
+ ranges = c(private_LW_minN_merged_GTE100bp, 
+            private_PI_minN_merged_GTE100bp, 
+            shared_LWminN_PIminN_merged_GTE100bp), 
+ 
+ minoverlap = 1
+ )
+
+saveRDS(snps_in_ROH, here("00_analysis/data/26_ROH_SOSFERT_samples", "snps_in_ROH.rds"))
+
+rm(snps_in_ROH)
+```
+
+```{r}
+
+snps_in_ROH <- here("00_analysis/data/26_ROH_SOSFERT_samples", "snps_in_ROH.rds") %>% readRDS()
+
+```
+
+Out of the 16M, ``r length(snps_in_ROH)`` SNPs are found in (private, shared) consensus ROHs.
+
+## How many of these SNPs are actualy fixed?
+```{r eval = FALSE}
+
+# it takes a while, expot it
+snps_in_ROH_with_freq <- inner_join(
+  snps_in_ROH %>% as_tibble(),
+  here("10_FinalVCF/output", "cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.frq") %>% 
+    vroom(), 
+  by = c("seqnames"="CHROM", "start" = "POS")
+  ) %>% 
+  dplyr::select(seqnames, start, end, `{ALLELE:FREQ}`) %>% 
+  separate(col = `{ALLELE:FREQ}`, into = c("ref_freq_tmp","alt_freq_tmp"), sep = c("\t")) %>% 
+  separate(col = ref_freq_tmp, into = c("ref","ref_freq"), sep = c(":")) %>% 
+  separate(col = alt_freq_tmp, into = c("alt","alt_freq"), sep = c(":"))
+           
+saveRDS(snps_in_ROH_with_freq, here("00_analysis/data/26_ROH_SOSFERT_samples", "snps_in_ROH_with_freq.rds"))
+
+rm(snps_in_ROH_with_freq)
+```
+
+```{r}
+snps_in_ROH_with_freq <- here("00_analysis/data/26_ROH_SOSFERT_samples", "snps_in_ROH_with_freq.rds") %>% readRDS()
+
+snps_in_ROH_with_freq_fixed <- snps_in_ROH_with_freq %>% filter(ref_freq == 0 | ref_freq == 1)
+```
+
+Out of the ``r length(snps_in_ROH)``, ``r nrow(snps_in_ROH_with_freq_fixed)`` are fixed.
+
+## Check annotations for fixed SNPs in ROHs of interest
+```{r}
+
+# takes too long, export it
+snps_in_ROH_with_freq_fixed_annot <- 
+  
+  inner_join(
+    
+    here("16_sNPeff/output","cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.ann.tab") %>% 
+      vroom(),
+    
+    snps_in_ROH_with_freq_fixed,
+    
+    by = c("CHROM"="seqnames", "POS"="start")
+    
+    )
+
+saveRDS(snps_in_ROH_with_freq_fixed_annot, here("00_analysis/data/26_ROH_SOSFERT_samples", "snps_in_ROH_with_freq_fixed_annot.rds"))
+
+rm(snps_in_ROH_with_freq_fixed_annot)
+```
+
+```{r}
+snps_in_ROH_with_freq_fixed_annot <- here("00_analysis/data/26_ROH_SOSFERT_samples", "snps_in_ROH_with_freq_fixed_annot.rds") %>% 
+  readRDS()
+```
+
+```{r}
+snps_in_ROH_with_freq_fixed_annot %>% 
+  group_by(`ANN[*].IMPACT`) %>% 
+  summarise(n=n())
+```
+
+As it is usually the case, only very few SNPs have a high impact and most SNPs are belong to the "MODIFIER" category.
+
+Inspect SNPs classified as having high or moderate impacts:
+```{r}
+snps_in_ROH_with_freq_fixed_annot %>% 
+  filter(`ANN[*].IMPACT` %in% c("HIGH","MODERATE")) %>% 
+  DT::datatable()
+```
+
+Get Gene ontologies (BP) for those genes (compare with sections below):
+```{r eval = FALSE}
+# run once and export
+ensembl <- useEnsembl(biomart = "genes", dataset = "sscrofa_gene_ensembl", version = "95")
+
+tmp_query <- getBM(attributes = c("ensembl_gene_id", "go_id", "name_1006", "namespace_1003", "external_gene_name"), 
+             filters = "ensembl_gene_id", 
+             values = snps_in_ROH_with_freq_fixed_annot %>% 
+                        filter(`ANN[*].IMPACT` %in% c("HIGH","MODERATE")) %>% 
+                        .$`ANN[*].GENEID` %>% 
+                        unique(), 
+             mart = ensembl) 
+
+saveRDS(tmp_query, here("00_analysis/data/26_ROH_SOSFERT_samples","moderate_high_impact_ROH_fixed_SNPs.rds"))
+
+```
+
+```{r}
+
+here("00_analysis/data/26_ROH_SOSFERT_samples","moderate_high_impact_ROH_fixed_SNPs.rds") %>%
+  readRDS() %>% 
+  filter(namespace_1003 == "biological_process") %>% 
+  DT::datatable()
+
+```
+
+
+## How are moderate/high impact SNPs distributed among ROHs?
+
+As it can be seen below, private-LW ROHs is the only set that do not contain any impact SNPs.
+
+High impact SNPs only occur in private Pietrain.They do not have GO-BPs.
+
+GO-BPs only are found in the shared subset for two genes HAO2 and STON2. Interesntingly HAO2 is inolved in lipid metabolism.
+
+### Private LW
+```{r}
+
+subsetByOverlaps(
+  snps_in_ROH_with_freq_fixed_annot %>% 
+    filter(`ANN[*].IMPACT` %in% c("HIGH","MODERATE")) %>% 
+    mutate(seqnames = CHROM, start = POS, end = POS) %>% 
+    dplyr::select(-CHROM, -POS) %>% 
+    makeGRangesFromDataFrame(keep.extra.columns = TRUE),
+  private_LW_minN_merged_GTE100bp,
+  minoverlap = 1
+) %>% 
+  as_tibble()
+
+
+```
+
+### Private PI
+```{r}
+subsetByOverlaps(
+  snps_in_ROH_with_freq_fixed_annot %>% 
+    filter(`ANN[*].IMPACT` %in% c("HIGH","MODERATE")) %>% 
+    mutate(seqnames = CHROM, start = POS, end = POS) %>% 
+    dplyr::select(-CHROM, -POS) %>% 
+    makeGRangesFromDataFrame(keep.extra.columns = TRUE),
+  private_PI_minN_merged_GTE100bp,
+  minoverlap = 1
+) %>% 
+  as_tibble() %>% 
+  DT::datatable()
+```
+
+### Shared
+```{r}
+subsetByOverlaps(
+  snps_in_ROH_with_freq_fixed_annot %>% 
+    filter(`ANN[*].IMPACT` %in% c("HIGH","MODERATE")) %>% 
+    mutate(seqnames = CHROM, start = POS, end = POS) %>% 
+    dplyr::select(-CHROM, -POS) %>% 
+    makeGRangesFromDataFrame(keep.extra.columns = TRUE),
+  shared_LWminN_PIminN_merged_GTE100bp,
+  minoverlap = 1
+) %>% 
+  as_tibble() %>% 
+  DT::datatable()
 ```
 

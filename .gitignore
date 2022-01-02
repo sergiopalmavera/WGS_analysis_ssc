@@ -34,6 +34,7 @@ ref_ensemble95/
 TMP/
 dump/
 rsconnect/
+OLD/
 04_selection_analysis/shiny_apps/explore_genes_fst_win_top1pct/snp_in_gene_vep_annot.csv
 *.csv
 *.recal*

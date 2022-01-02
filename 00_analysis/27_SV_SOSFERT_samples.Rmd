@@ -1,0 +1,488 @@
+---
+title: "SV analysis - SOSFERT samples"
+output: 
+  html_document:
+    toc: 5
+    code_folding: show
+---
+
+
+
+```{r libraries,  include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(here)
+library(tidyverse)
+library(vroom)
+library(knitr)
+library(biomaRt)
+```
+
+# Intro
+
+Analysis conducted by Lorena, where she identified Structural Variants (SVs) from high-coverage WGS data from 10 LW and 10 PI pigs.
+
+Each SV is classified as "genic-SV" because it overlaps with at least one gene. SVs NOT overlapping genes are not in this data set.
+
+The purpose of this analysis is to integrate SV information with runs of homozygosity detected using SNPs.
+
+In order to make both analysis comparable, 
+
+
+# Import data
+
+```{r import_sv_data}
+
+sv_genic_lw <- here("../../../../Lorena_SVs/pig","Large_white_SVs.txt") %>% vroom(col_types = c("No_of_genes" = "n"))
+
+sv_genic_pi <- here("../../../../Lorena_SVs/pig","Pietrain_SVs.txt") %>% vroom(col_types = c("No_of_genes" = "n"))
+
+```
+
+# Exploratory Data Analysis
+
+## Type of SVs found
+
+Deletions and inversions appeared in comparable amounts (60-70), whereas much less duplications were found (8-9).
+
+Interestingly, the there were the same number of SVs per breed. Is this coincidence? ... Lorena will clarify this soon.
+
+```{r}
+
+list(LW = sv_genic_lw, PI = sv_genic_pi) %>% 
+  bind_rows(.id = "breed") %>% 
+  group_by(breed, SV_type) %>% 
+  summarise(n = n()) %>% 
+  reshape2::dcast(breed ~ SV_type, value.var = "n") %>% 
+  janitor::adorn_totals(where = c("row", "col")) %>% 
+  kable()  
+
+```
+
+## Private and shared SVs
+
+Since the same number of SVs are found in both breeds, the number of private and shared SVs is also the same: 82 private and 58 shared.
+
+
+```{r}
+list(LW = sv_genic_lw, PI = sv_genic_pi) %>% 
+  bind_rows(.id = "breed") %>% 
+  group_by(breed, `SV status`) %>% 
+  summarise(n = n()) %>% 
+  reshape2::dcast(breed ~ `SV status`, value.var = "n") %>% 
+  janitor::adorn_totals(where = c("row", "col")) %>% 
+  kable()  
+```
+
+## Fixed and polymorphic SVs by status (private, shared)
+
+Fixed SVs are indicated by "1/1" (all 10 individuals in a breed have the variant). Polymorphic SVs are indicated by "0/1".
+
+Fixed SVs (~60-70 per breed) are in ~55/45 split private/shared (there are slightly more private SVs than shared ones).
+
+```{r}
+list(LW = sv_genic_lw, PI = sv_genic_pi) %>% 
+  bind_rows(.id = "breed") %>% 
+  group_by(breed, Zygosity, `SV status`) %>% 
+  summarise(n = n()) %>% 
+  reshape2::dcast(breed + `SV status` ~ Zygosity, value.var = "n") %>% 
+  janitor::adorn_totals(where = c("row", "col")) %>% 
+  kable()  
+```
+
+## How large are SVs?
+
+Inversions are the largest type of SV. 
+
+Deletions are in average the shortests SV type. Though longest deletions surpase longest duplications.
+
+```{r}
+
+list(LW = sv_genic_lw, PI = sv_genic_pi) %>% 
+  bind_rows(.id = "breed") %>% 
+  group_by(breed, SV_type) %>% 
+  summarise(n = n(), min = min(SV_length_bp), max = max(SV_length_bp), median = median(SV_length_bp), mean = mean(SV_length_bp)) %>% 
+  kable(format.args = list(big.mark = ","))    
+
+```
+
+## How much genome territory is affected by SVs?
+
+Though duplications are in average larger than deletions, they are also much less frequent. Therefore, the total amount of base pairs covered by duplications is less than the total amount of bp spanned by deletions.
+
+Inversions covere two orders of magnitude more genome than deletions or duplications.
+
+```{r}
+list(LW = sv_genic_lw, PI = sv_genic_pi) %>% 
+  bind_rows(.id = "breed") %>% 
+  group_by(breed, SV_type) %>% 
+  summarise(total_bp = sum(SV_length_bp)) %>% 
+  reshape2::dcast(breed ~ SV_type, value.var = "total_bp") %>% 
+  janitor::adorn_totals(where = c("row", "col")) %>% 
+  kable(format.args = list(big.mark = ","))    
+```
+
+# Fixed SVs
+
+In order to integrate SV results with runs of homozygosity detected using SNPs. This section focuses only on analyzing fixed SVs (1/1).
+
+## How many SVs are fixed 
+
+By focusing only on fixed SVs, the number of variants by type (deletions, duplications, insertions) drops. Interestingly, only one duplication remains.
+
+```{r}
+
+list(LW = sv_genic_lw, PI = sv_genic_pi) %>% 
+  bind_rows(.id = "breed") %>% 
+  group_by(breed, Zygosity, SV_type) %>% 
+  summarise(n = n()) %>% 
+  reshape2::dcast(breed + SV_type ~ Zygosity, value.var = "n") %>% 
+  janitor::adorn_totals(where = "col") %>% 
+  kable()  
+
+```
+
+## Fixed variants by state (private, shared)
+
+The number of shared deletions is comparable to the number of private deletions. 
+
+Only one fixed duplication remained in each bread. This duplication is shared.
+
+Private inversions are 3x more abundant than shared inversions.
+
+Thus, in terms of private fixed SVs, only inversions and deletions are available.
+
+```{r}
+fixed_SVs <- list(LW = sv_genic_lw, PI = sv_genic_pi) %>% 
+  bind_rows(.id = "breed") %>% 
+  filter(Zygosity == "1/1")
+```
+
+```{r}
+
+fixed_SVs %>% 
+  group_by(breed, SV_type, `SV status`) %>% 
+  summarise(n = n()) %>% 
+  reshape2::dcast(breed+`SV status` ~ SV_type, value.var = "n") %>% 
+  kable()
+
+```
+
+Shared deletions do not occur in the same amount at each breed, because some might be shared but not all of them are fixed.
+
+```{r}
+list(LW = sv_genic_lw, PI = sv_genic_pi) %>% 
+  bind_rows(.id = "breed") %>% 
+  filter(`SV status` == "shared") %>% 
+  group_by(breed, SV_type, `SV status`, Zygosity) %>% 
+  summarise(n = n()) %>% 
+  reshape2::dcast(breed+`SV status` + Zygosity ~ SV_type, value.var = "n") %>% 
+  kable()
+```
+
+
+## Do all shared variants have the exact same coordinates?
+
+Maybe some of them are partially overlapping?
+
+```{r}
+
+inner_join(sv_genic_lw %>% filter(Zygosity == "1/1") %>% dplyr::select(Chr, SV_start, SV_end, SV_type), 
+           sv_genic_pi %>% filter(Zygosity == "1/1") %>% dplyr::select(Chr, SV_start, SV_end, SV_type), 
+           by = c("Chr","SV_start","SV_end","SV_type")) %>% 
+  group_by(SV_type) %>% 
+  summarise(n = n()) %>% 
+  kable()
+
+```
+
+The number of Duplications and Inversions is as expected (1 and 5, respectively).
+
+The number of identical shared fixed deletions is 19, whereas the expected number was more than that (LW-21-fixed, PI-23-fixed), meaning that only 19 deletions are fixed in both lines.
+
+## Where are fixed SVs located?
+
+Shared deletions occur in 11/18 chromosomes (except 8-9, 10-13, 15, 18).
+Only one shared duplication is oberved in 14. There are no private fixed duplications.
+Shared inversions only occur in chrs 7, 9 and 15.
+Private deletions and inversions occur in the majority of chromosomes.
+At each chromosome, there are no more than 6 SVs.
+
+```{r}
+x <- fixed_SVs %>% 
+  group_by(breed, SV_type, `SV status`, Chr) %>% 
+  summarise(n=n()) %>%
+  mutate(Chr = factor(Chr, levels = c(1:18,"X"))) %>% 
+  arrange(Chr) %>% 
+  reshape2::dcast(breed + SV_type + `SV status` ~ Chr, value.var = "n") %>% 
+  arrange(SV_type, `SV status`, breed) 
+
+ma <- x %>% 
+  mutate(rn = paste(breed, SV_type, `SV status`, sep = "_")) %>% 
+  tibble::column_to_rownames("rn") %>% 
+  dplyr::select(-breed, -SV_type, -`SV status`) %>%
+  as.matrix()
+
+pheatmap::pheatmap(ma, na_col = "grey", cluster_rows = FALSE, cluster_cols = FALSE)
+
+rm(x, ma)
+```
+
+## Genes impacted by SVs
+
+What kind of impact (as per VEP) are there?
+```{r}
+fixed_SVs %>% 
+  group_by(`SV Impact`) %>% 
+  summarise(n = n())
+```
+
+Among fixed SVs, only high and modifier impacts are found, with 1.6 more high impact SVs than modifiers.
+
+
+## High impact SVs
+Since modifiers are too speculative and considering the high number of high impact SVs, the rest will focus on the later.
+
+```{r}
+
+fixed_SVs_high <- fixed_SVs %>% filter(`SV Impact` == "HIGH")
+
+```
+
+
+### How many high-impact SVs are shared/private?
+```{r}
+fixed_SVs_high %>% 
+  group_by(breed, SV_type, `SV status`) %>% 
+  summarise(n = n()) %>% 
+  reshape2::dcast(breed + `SV status` ~ SV_type, value.var = "n") %>% 
+  kable()
+```
+
+High impact deletions are the most abundant SVs, appearing as both private and shared.
+
+There are only two private inversions for LW. There are no other kinds of inversions.
+
+Duplications are not found among the high impact fixed SVs.
+
+
+### What kind of (high) impacts are there?
+```{r}
+fixed_SVs_high %>% 
+  group_by(Consequence, SV_type) %>% 
+  summarise(n = n()) %>% 
+  reshape2::dcast(Consequence ~ SV_type, value.var = "n") %>% 
+  kable()
+```
+
+Transcript ablation is the most dominant class of high impact SVs, corresponding only to deletions. 
+
+High impact fixed (private LW) inversions both lead to "start_lost&coding_sequence_variant&5_prime_UTR_variant&3_prime_UTR_variant".
+
+
+### How many genes are impacted by fixed-high impact SVs there?
+```{r}
+fixed_SVs_high %>% 
+  group_by(breed,Consequence, SV_type) %>% 
+  summarise(total_No_of_genes = sum(No_of_genes)) %>% 
+  reshape2::dcast(breed + Consequence ~ SV_type, value.var = "total_No_of_genes") %>% 
+  janitor::adorn_totals() %>% 
+  kable()
+```
+
+In principle, a total of 99 genes are affected by fixed high impact SVs. It could be that some of them are double counted. To know this, tidy data up (gene-SV as distinct observations)
+
+
+### Tidy gene ids up 
+```{r}
+
+fixed_SVs_high_by_gene <- lapply(1:nrow(fixed_SVs_high), function(i){
+  
+  ss <- fixed_SVs_high[i,]
+  
+  gns <- ss$`Ensembl Gene ID` %>% str_split(pattern = "[|]") %>% unlist() %>% str_trim()
+
+  gns_df <- tibble(genes = gns, gene_tmp_id = paste0("gene_",1:length(gns))) %>% 
+    pivot_wider(values_from = genes, names_from = gene_tmp_id)
+  
+  bind_cols(ss, gns_df) %>% 
+    reshape2::melt(id.vars = names(.)[1:19], value.name = "gene_ensembl_id") %>% 
+    dplyr::select(-variable)
+  
+  }) %>% 
+  bind_rows() %>% 
+  as_tibble()
+```
+
+### Total number of distinct genes affected by fixed high impact SVs
+```{r}
+
+fixed_SVs_high_by_gene %>% 
+  dplyr::select(gene_ensembl_id) %>% 
+  unique() %>% 
+  summarise(total_No_of_genes = n())
+
+```
+
+Some genes are counted twice (there were initially 99 genes)
+
+Genes by class
+```{r}
+fixed_SVs_high_by_gene %>% 
+  dplyr::select(SV_type, gene_ensembl_id) %>% 
+  unique() %>% 
+  group_by(SV_type) %>% 
+  summarise(total_No_of_genes = n()) %>% 
+  kable()
+
+```
+
+There are 70 genes in deletions and 3 genes in inversions.
+
+
+### Add gene symbols
+```{r eval = FALSE}
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "sscrofa_gene_ensembl")
+
+bm_query_gene_sym_gobp <- getBM(attributes = c("ensembl_gene_id", 
+                                               "go_id", "name_1006", "namespace_1003", 
+                                               "external_gene_name", "hgnc_symbol"), 
+      filters = "ensembl_gene_id", 
+      values = fixed_SVs_high_by_gene$gene_ensembl_id %>% unique(), 
+      mart = ensembl) %>% 
+  as_tibble()
+
+
+bm_query_gene_sym_gobp$ensembl_gene_id %>% unique()
+
+bm_query_gene_sym_gobp %>% View()
+
+write.csv(bm_query_gene_sym_gobp, here("00_analysis/data/27_SV_SOSFERT_samples/SVs_bm_query_gene_sym_gobp.csv"))
+```
+
+```{r}
+SVs_bm_query_gene_sym_gobp <- here("00_analysis/data/27_SV_SOSFERT_samples/SVs_bm_query_gene_sym_gobp.csv") %>% 
+  vroom() %>% 
+  dplyr::select(-"...1")
+```
+
+
+Not possible to add gene symbols. All genes are classified as "novel". 
+
+http://vega.archive.ensembl.org/info/website/glossary.html
+  "Predictions of "Ensembl novel genes" are based on other experimental evidence such as protein and cDNA sequence information from related species."
+  "A novel gene is an Ensembl gene for which only one or more novel transcripts have been annotated."
+
+
+### Inspect genes (showingonly GO-BPs)
+
+#### LW private
+```{r}
+
+fixed_SVs_high_by_gene_private_LW_GOBP <- 
+  inner_join(fixed_SVs_high_by_gene, SVs_bm_query_gene_sym_gobp, by = c("gene_ensembl_id"="ensembl_gene_id")) %>% 
+  filter(`SV status` == "private", breed == "LW", namespace_1003=="biological_process")
+   
+
+fixed_SVs_high_by_gene_private_LW_GOBP %>% 
+  dplyr::select(breed, SV_type, Chr, SV_start, SV_end, SV_length_bp, `SV Impact`, Consequence, gene_ensembl_id, name_1006, namespace_1003) %>% 
+  DT::datatable()
+
+```
+
+#### PI private
+```{r}
+
+fixed_SVs_high_by_gene_private_PI_GOBP <- 
+  inner_join(fixed_SVs_high_by_gene, SVs_bm_query_gene_sym_gobp, by = c("gene_ensembl_id"="ensembl_gene_id")) %>% 
+  filter(`SV status` == "private", breed == "PI", namespace_1003=="biological_process")  
+
+fixed_SVs_high_by_gene_private_PI_GOBP %>% 
+  dplyr::select(breed, SV_type, Chr, SV_start, SV_end, SV_length_bp, `SV Impact`, Consequence, gene_ensembl_id, name_1006, namespace_1003) %>% 
+  DT::datatable()
+
+```
+
+#### Shared
+```{r}
+
+fixed_SVs_high_by_gene_shared_GOBP <- 
+  inner_join(fixed_SVs_high_by_gene, SVs_bm_query_gene_sym_gobp, by = c("gene_ensembl_id"="ensembl_gene_id")) %>% 
+  filter(`SV status` == "shared", namespace_1003=="biological_process") 
+
+fixed_SVs_high_by_gene_shared_GOBP %>% 
+  dplyr::select(breed, SV_type, Chr, SV_start, SV_end, SV_length_bp, `SV Impact`, Consequence, gene_ensembl_id, name_1006, namespace_1003) %>%
+  DT::datatable()
+
+```
+
+
+
+### Summarize GO-BPs
+
+#### LW private
+```{r}
+
+fixed_SVs_high_by_gene_private_LW_GOBP %>% 
+  filter(!is.na(go_id)) %>% 
+  dplyr::select(go_id, name_1006, gene_ensembl_id) %>% 
+  unique() %>% 
+  group_by(go_id, name_1006) %>% 
+  summarise(n_genes=n(), genes = paste0(gene_ensembl_id, collapse = "; ")) %>% 
+  arrange(desc(n_genes)) %>% 
+  DT::datatable()
+
+```
+
+
+#### PI private
+```{r}
+fixed_SVs_high_by_gene_private_PI_GOBP %>% 
+  filter(!is.na(go_id)) %>% 
+  dplyr::select(go_id, name_1006, gene_ensembl_id) %>% 
+  unique() %>% 
+  group_by(go_id, name_1006) %>% 
+  summarise(n_genes=n(), genes = paste0(gene_ensembl_id, collapse = "; ")) %>% 
+  arrange(desc(n_genes)) %>% 
+  DT::datatable()
+```
+
+
+#### Shared
+```{r}
+fixed_SVs_high_by_gene_shared_GOBP %>% 
+  dplyr::select(go_id, name_1006, gene_ensembl_id) %>% 
+  unique() %>% 
+  filter(!is.na(go_id)) %>% 
+  group_by(go_id, name_1006) %>% 
+  summarise(n_genes=n(), genes = paste0(gene_ensembl_id, collapse = "; ")) %>% 
+  arrange(desc(n_genes)) %>% 
+  DT::datatable()
+```
+
+# Recap
+
+- SVs were identified in LW and PI.
+
+- Deletions, duplications and inversions were detected.
+
+- Each type of SV was classified by their zygosity (fixed (1/1) or polymorphic (0/1)) and also by their distinctiveness (private) or commonality (shared).
+
+- Since the purpose of this analysis was to combine it with information on runs of homozygosity, only fixed SVs were further analysed.
+
+- In order to understand the putative impact of these variants, SVs were annotated with VEP. More than half of all predicted effects were classified as having a high impact on gene expression (mostly transcript ablation). These SVs and their corresponding genes were retained for further functional annotations (GO-BPs).
+
+- All genes associated to high-impact SVs were classified as "novel genes". These genes are not yet well described and therefore do not have a gene symbol. However, these genes do have gene ontologies though.
+
+- RNA mediated transposition was the only GOBP represented by >1 gene. Interestingly this occurred in all categories (privates and shared), but in different genomic locations and always as a product of deletions.
+
+
+
+
+
+
+
+
+
+
