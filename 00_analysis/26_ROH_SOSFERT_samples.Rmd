@@ -17,7 +17,7 @@ library(GenomicRanges)
 library(here)
 library(knitr)
 library(biomaRt)
-library(rrvgo)
+library(rrvgo) #BiocManager::install("rrvgo")
 
 ```
 
@@ -25,6 +25,12 @@ library(rrvgo)
 sample_info <- vroom(here("sample_info/internal_external_sample_info.tsv"))
 ```
 
+
+```{r gene_set_scc}
+
+ssc_gene_set <- readRDS(here("ref_ensemble95/gene_set/ssc_gene_set.rds"))
+
+```
 
 # Intro
 
@@ -256,6 +262,440 @@ ggplot(fractions, aes(x = breed, y = mean, fill = roh_class)) +
   theme(legend.title = element_blank(), plot.title = element_text(hjust = 0.5))
 
 ```
+
+# Genes in RoH
+
+## Get gene lists for each sample
+```{r}
+genes_ov_roh_by_sample <- lapply(roh_dat_incl_class$sample %>% unique(), function(sp){
+
+  res <- subsetByOverlaps(
+    ssc_gene_set, 
+    roh_dat_incl_class %>% 
+      filter(sample == sp) %>% 
+      dplyr::rename(seqnames = chr) %>% 
+      dplyr::select(seqnames, start, end) %>% 
+      makeGRangesFromDataFrame(), 
+    minoverlap = 1L
+  )
+  
+  return(res)
+  
+})
+
+names(genes_ov_roh_by_sample) <- roh_dat_incl_class$sample %>% unique()
+
+```
+
+There is a large number of genes overlapping RoHs in each sample
+```{r}
+genes_ov_roh_by_sample %>% sapply(length)
+```
+
+## Genes shared by all samples
+```{r}
+genes_ov_roh_shared <- genes_ov_roh_by_sample %>% 
+  lapply(function(x) x %>% as_tibble %>% dplyr::select(gene_id)) %>% 
+  purrr::reduce(inner_join, by = "gene_id") %>% 
+  unique() %>% 
+  inner_join(ssc_gene_set %>% as_tibble, by = "gene_id")
+```
+
+There are only `r nrow(genes_ov_roh_shared)` genes found overlapping RoHs in all samples.
+
+## Get genes private for LW
+```{r}
+
+genes_ov_roh_private_LW <- genes_ov_roh_by_sample %>% 
+  .[names(.) %in% (sample_info %>% filter(breed == "Large White", project == "SOSFERT") %>% .$sample_id)] %>% 
+  lapply(function(x) x %>% as_tibble() %>% dplyr::select(gene_id)) %>% 
+  purrr::reduce(inner_join, by = "gene_id") %>% 
+  anti_join(genes_ov_roh_shared, by = "gene_id") %>% 
+  inner_join(ssc_gene_set %>% as_tibble, by = "gene_id")
+  
+```
+
+The number of private LW genes (`r nrow(genes_ov_roh_private_LW)` genes) is much larger than the shared gene list.
+
+## Get genes private for PI
+```{r}
+
+genes_ov_roh_private_PI <- genes_ov_roh_by_sample %>% 
+  .[names(.) %in% (sample_info %>% filter(breed == "Pietrain", project == "SOSFERT") %>% .$sample_id)] %>% 
+  lapply(function(x) x %>% as_tibble() %>% dplyr::select(gene_id)) %>% 
+  purrr::reduce(inner_join, by = "gene_id") %>% 
+  anti_join(genes_ov_roh_shared, by = "gene_id") %>% 
+  inner_join(ssc_gene_set %>% as_tibble, by = "gene_id")
+
+```
+
+There are more private genes overlapping Pietrain RoHs: `r nrow(genes_ov_roh_private_PI)`
+
+# Use gene lists to conduct enrichment analysis with enrichr
+
+Enrichr is an r package for enrichr (https://maayanlab.cloud/Enrichr/). 
+
+Here is the vignette: https://cran.r-project.org/web/packages/enrichR/vignettes/enrichR.html
+
+Use the human ortholog ids to obtain better annotations
+
+There were significant results this time. See conclusions at the end of the section.
+
+## Select data bases
+
+```{r define_dbs, eval = FALSE}
+#install.packages("enrichR")
+library(enrichR)
+dbs <- c("KEGG_2021_Human", "GO_Biological_Process_2021")
+```
+
+## Transfrom ssc ids into hsa ids
+```{r, eval = FALSE}
+ensembl <- useEnsembl(biomart = "genes", dataset = "sscrofa_gene_ensembl", version = "95")
+
+```
+
+```{r, eval=FALSE}
+private_LW_hsaid <- getBM(attributes = c("ensembl_gene_id", "hsapiens_homolog_ensembl_gene"), 
+                                                        filters = "ensembl_gene_id", 
+                                                        values = genes_ov_roh_private_LW$gene_id, 
+                                                        mart = ensembl)
+
+
+private_PI_hsaid <- getBM(attributes = c("ensembl_gene_id", "hsapiens_homolog_ensembl_gene"), 
+                                                        filters = "ensembl_gene_id", 
+                                                        values = genes_ov_roh_private_PI$gene_id, 
+                                                        mart = ensembl)
+
+
+shared_hsaid <- getBM(attributes = c("ensembl_gene_id", "hsapiens_homolog_ensembl_gene"), 
+                                                             filters = "ensembl_gene_id", 
+                                                             values = genes_ov_roh_shared$gene_id, 
+                                                             mart = ensembl)
+```
+
+## Transform hsa ids into gene symbols
+```{r biomart_ensemblid_to_gene_symbol, eval=FALSE}
+
+ensembl_hsa <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+gns_LW_sym <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"), filters = "ensembl_gene_id", 
+                values = private_LW_hsaid$hsapiens_homolog_ensembl_gene, mart = ensembl_hsa)
+
+gns_PI_sym <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"), filters = "ensembl_gene_id", 
+                values = private_PI_hsaid$hsapiens_homolog_ensembl_gene, mart = ensembl_hsa)
+
+gns_shared_sym <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"), filters = "ensembl_gene_id", 
+                values = shared_hsaid$hsapiens_homolog_ensembl_gene, mart = ensembl_hsa)
+
+```
+
+## Run enrichments and export
+
+```{r do_enrichment_and_export, eval=FALSE}
+LW_enrichr_results <- enrichr(gns_LW_sym %>% filter(hgnc_symbol != "") %>% .$hgnc_symbol, dbs) 
+
+PI_enrichr_results <- enrichr(gns_PI_sym %>% filter(hgnc_symbol != "") %>% .$hgnc_symbol, dbs)
+
+shared_enrichr_results <- enrichr(gns_shared_sym %>% filter(hgnc_symbol != "") %>% .$hgnc_symbol, dbs)
+
+saveRDS(LW_enrichr_results, here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH","LW_enrichr_results.rds"))
+saveRDS(PI_enrichr_results, here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH","PI_enrichr_results.rds"))
+saveRDS(shared_enrichr_results, here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH","shared_enrichr_results.rds"))
+
+rm(LW_enrichr_results, PI_enrichr_results, shared_enrichr_results)
+
+```
+
+## Import and filter results
+
+Retrieve biological functions of interest with an FDR of 10% were retained.
+
+```{r enrichr_import_and_filter}
+
+min_genes <- 0
+adj_pval_cutoff <- 0.1
+
+filter_enrichr_results <- function(rds, min_genes, adj_pval_cutoff){
+  
+  here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH",rds) %>%
+    readRDS() %>% 
+    lapply(function(x){
+      x %>% 
+        separate(col = Overlap, into = c("n_genes_query","n_genes_subject"), sep = "/") %>% 
+        filter(n_genes_query >= min_genes,
+               Adjusted.P.value < adj_pval_cutoff) %>% 
+        dplyr::select(Term, n_genes_query, n_genes_subject, P.value, Adjusted.P.value, Genes)
+      }) 
+    
+}
+
+LW_enrichr_results_sig <- filter_enrichr_results(rds = "LW_enrichr_results.rds", min_genes = min_genes, adj_pval_cutoff = adj_pval_cutoff)
+
+PI_enrichr_results_sig <- filter_enrichr_results(rds = "PI_enrichr_results.rds", min_genes = min_genes, adj_pval_cutoff = adj_pval_cutoff)
+
+shared_enrichr_results_sig <- filter_enrichr_results(rds = "shared_enrichr_results.rds", min_genes = min_genes, adj_pval_cutoff = adj_pval_cutoff)
+
+```
+
+### Significant results LW
+```{r}
+LW_enrichr_results_sig$KEGG_2021_Human %>% kable()
+```
+
+```{r}
+LW_enrichr_results_sig$GO_Biological_Process_2021 %>% kable()
+```
+
+### Significant results PI wer not observed
+```{r}
+PI_enrichr_results_sig$KEGG_2021_Human %>% kable()
+```
+
+```{r}
+PI_enrichr_results_sig$GO_Biological_Process_2021 %>% kable()
+```
+
+### Siginificant results shared genes only for GOBP
+```{r}
+shared_enrichr_results_sig$KEGG_2021_Human %>% kable()
+```
+
+```{r}
+shared_enrichr_results_sig$GO_Biological_Process_2021 %>% kable()
+```
+
+## Conclusions so far
+
+- At an FDR of 10% there are significant results for LW and shared, not for PI.
+
+- This might not yet be the best way to interpret the data because it might be too stringet (i.e. nothing is learned of private PI genes).
+
+- Pause this part of the analysis for a bit and focus on exploring GO terms, grouping them by similarity with rvgo.
+
+# Explore GO annotations with rrvgo
+
+The package rrvgo offers summaries of all go terms in a list by grouping according to their semantic simmilarity.
+
+This piece of information can be used to complete enrichr analysis.
+
+## Prepare data
+```{r rrvgo_sim_ma, eval=FALSE}
+
+rrvgo_prep <- function(rds){
+  # import results from enrichr, this includes not-significant results
+  d <- here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH",rds) %>% readRDS() %>% .$GO_Biological_Process_2021
+  
+  term_padj <- d %>% 
+    mutate(Term = str_split(string = Term, pattern = " [(]") %>% sapply(function(y) y[2]) %>% str_remove("[)]")) %>% 
+    dplyr::select(Term, Adjusted.P.value)
+  
+  sim_ma <- calculateSimMatrix(x = term_padj$Term, orgdb="org.Hs.eg.db", ont="BP", method="Rel")
+  
+  scores <- setNames(-log10(term_padj$Adjusted.P.value), term_padj$Term)
+  
+  reduced_terms <- reduceSimMatrix(sim_ma, scores, threshold=0.7, orgdb="org.Hs.eg.db")
+  
+  res <- list(d, sim_ma, reduced_terms)
+  
+  names(res) <- c("enrichr_res","sim_ma","reduced_terms")
+  
+  return(res)
+  
+}
+
+rrvgo_prep_LW <- rrvgo_prep("LW_enrichr_results.rds")
+
+rrvgo_prep_PI <- rrvgo_prep("PI_enrichr_results.rds")
+
+rrvgo_prep_shared <- rrvgo_prep("shared_enrichr_results.rds")
+
+# export to save time later
+saveRDS(rrvgo_prep_LW, here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH", "rrvgo_prep_LW.rds"))
+saveRDS(rrvgo_prep_PI, here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH", "rrvgo_prep_PI.rds"))
+saveRDS(rrvgo_prep_shared, here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH", "rrvgo_prep_shared.rds"))
+rm(rrvgo_prep_LW, rrvgo_prep_PI, rrvgo_prep_shared)
+```
+
+```{r}
+rrvgo_prep_LW <- readRDS(here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH", "rrvgo_prep_LW.rds"))
+rrvgo_prep_PI <- readRDS(here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH", "rrvgo_prep_PI.rds"))
+rrvgo_prep_shared <- readRDS(here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH", "rrvgo_prep_shared.rds"))
+```
+
+## Large White
+
+#### Tree map plot
+```{r fig.width=12, fig.height=8}
+
+treemapPlot(rrvgo_prep_LW$reduced_terms)
+
+```
+
+#### PCA semmantic simmilarity
+```{r fig.width=12, fig.height=12}
+
+scatterPlot(simMatrix = rrvgo_prep_LW$sim_ma, reducedTerms = rrvgo_prep_LW$reduced_terms)
+
+```
+
+#### Reduced Terms
+```{r}
+rrvgo_prep_LW$reduced_terms %>% 
+  group_by(parentTerm) %>% 
+  summarise(n_terms = n(), terms = paste(term, collapse = "; ")) %>% 
+  arrange(desc(n_terms)) %>% 
+  DT::datatable(rownames = FALSE)
+```
+
+### Enrichr GOBP results
+```{r}
+rrvgo_prep_LW$enrichr_res %>% DT::datatable(rownames = FALSE)
+```
+
+## Pietrain
+
+#### Tree map plot
+```{r fig.width=12, fig.height=8}
+
+treemapPlot(rrvgo_prep_PI$reduced_terms)
+
+```
+
+#### PCA semmantic simmilarity
+```{r fig.width=12, fig.height=12}
+
+scatterPlot(simMatrix = rrvgo_prep_PI$sim_ma, reducedTerms = rrvgo_prep_PI$reduced_terms)
+
+```
+
+#### Reduced Terms
+```{r}
+rrvgo_prep_PI$reduced_terms %>% 
+  group_by(parentTerm) %>% 
+  summarise(n_terms = n(), terms = paste(term, collapse = "; ")) %>% 
+  arrange(desc(n_terms)) %>% 
+  DT::datatable(rownames = FALSE)
+```
+
+### Enrichr GOBP results
+```{r}
+rrvgo_prep_PI$enrichr_res %>% DT::datatable(rownames = FALSE)
+```
+
+### Muscle genes
+
+After manual inspection, the following terms appeared: muscle, myoblast and sarcomere. This makes sense for pietrain.
+
+```{r}
+rrvgo_prep_PI$enrichr_res %>% as_tibble() %>% filter(grepl("muscle|myoblast|sarcomere", Term), !grepl("cardiac|smooth", Term)) %>% 
+  kable(digits = 2)
+```
+
+```{r eval = FALSE}
+muscle_genes <- rrvgo_prep_PI$enrichr_res %>% 
+  as_tibble() %>% 
+  filter(grepl("muscle|myoblast|sarcomere|myosin", Term), !grepl("cardiac|smooth", Term)) %>% 
+  dplyr::select(Genes) %>% 
+  apply(1,function(x){
+    str_split(string = x, pattern = ";") %>% unlist()
+  }) %>% 
+  unlist() %>% 
+  unique()
+
+muscle_genes
+```
+
+
+Is there any high/moderate mutation in these genes?
+
+```{r eval = FALSE}
+
+snp_annot <- here("16_sNPeff/output","cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered.ann.tab") %>% 
+        vroom()
+
+muscle_genes_snp_annot <- lapply(muscle_genes, function(gn){
+  
+  gns_PI_sym %>% 
+    filter(hgnc_symbol == gn) %>% 
+    inner_join(private_PI_hsaid, by = c("ensembl_gene_id"="hsapiens_homolog_ensembl_gene"), suffix = c("_hsa","_ssc")) %>% 
+    inner_join(
+      snp_annot,
+      by = c("ensembl_gene_id_ssc"="ANN[*].GENEID")
+    ) %>% 
+    unique() %>% 
+    filter(`ANN[*].IMPACT` %in% c("MODERATE", "HIGH"))
+  
+})
+
+pi_allele_frq <- here("14_allele_frequencies/output",
+                      "cohort_biallelicSNPs_HardFiltered_WithMissingness_SOSFERTsamples_GTfiltered_Pietrain_all_sites.frq2") %>%
+  vroom() %>% 
+  dplyr::select(-REF, -ALT)
+
+muscle_genes_snp_annot_freq <- lapply(muscle_genes_snp_annot, function(x){
+  x %>% inner_join(pi_allele_frq, by = c("CHROM","POS"))
+  })
+
+muscle_genes_snp_annot_freq <- muscle_genes_snp_annot_freq %>% bind_rows()
+
+write.csv(muscle_genes_snp_annot_freq, here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH", "muscle_genes_snp_annot_freq.csv"))
+```
+
+```{r}
+here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH", "muscle_genes_snp_annot_freq.csv") %>% 
+  vroom() %>% 
+  DT::datatable()
+```
+
+
+```{r}
+
+here("00_analysis/data/26_ROH_SOSFERT_samples/enrichR_ROH", "muscle_genes_snp_annot_freq.csv") %>% 
+  vroom() %>% 
+  mutate(SNV_locus = paste0(CHROM,":",POS)) %>% 
+  filter(ALT_frq == 1) %>% 
+  dplyr::select(hgnc_symbol, SNV_locus, `ANN[*].EFFECT`) %>% 
+  mutate(tmp = paste0(SNV_locus, " (", `ANN[*].EFFECT`, ")")) %>% 
+  group_by(hgnc_symbol) %>% 
+  summarise(n_mutations = n(), SNV_locus_and_effect = paste(tmp, collapse = " | ")) %>% 
+  kable()
+
+```
+
+
+
+
+## Shared
+
+#### Tree map plot
+```{r fig.width=12, fig.height=8}
+
+treemapPlot(rrvgo_prep_shared$reduced_terms)
+
+```
+
+#### PCA semmantic simmilarity
+```{r fig.width=12, fig.height=12}
+
+scatterPlot(simMatrix = rrvgo_prep_shared$sim_ma, reducedTerms = rrvgo_prep_shared$reduced_terms)
+
+```
+
+#### Reduced Terms
+```{r}
+rrvgo_prep_shared$reduced_terms %>% 
+  group_by(parentTerm) %>% 
+  summarise(n_terms = n(), terms = paste(term, collapse = "; ")) %>% 
+  arrange(desc(n_terms)) %>% 
+  DT::datatable(rownames = FALSE)
+```
+
+### Enrichr GOBP results
+```{r}
+rrvgo_prep_shared$enrichr_res %>% DT::datatable(rownames = FALSE)
+```
+
 
 # Private and shared ROHs
 
@@ -576,15 +1016,15 @@ Some consensus ROHs can occur next to each other. Merge those.
 
 private_LW_minN_merged <- private_LW_minN %>% 
   makeGRangesFromDataFrame(keep.extra.columns = TRUE) %>% 
-  reduce(min.gapwidth = 1)
+  GenomicRanges::reduce(min.gapwidth = 1)
 
 private_PI_minN_merged <- private_PI_minN %>% 
   makeGRangesFromDataFrame(keep.extra.columns = TRUE) %>% 
-  reduce(min.gapwidth = 1)
+  GenomicRanges::reduce(min.gapwidth = 1)
 
 shared_LWminN_PIminN_merged <- shared_LWminN_PIminN %>% 
   makeGRangesFromDataFrame(keep.extra.columns = TRUE) %>% 
-  reduce(min.gapwidth = 1)
+  GenomicRanges::reduce(min.gapwidth = 1)
 
 ```
 
@@ -606,6 +1046,8 @@ list(
 ```
 
 There are much more shared roh-bases than private roh-bases.
+
+But a lot of information is lost. Recall that for each sample >700Mb were found in RoH. Using the consensus approach, between 1.7Mb to 5.5Mb are usable. This might be sub-optimal.
 
 
 ## What proportion of ROHs are below 100bp? - less than 100bp might too low.
@@ -637,13 +1079,19 @@ shared_LWminN_PIminN_merged_GTE100bp <- shared_LWminN_PIminN_merged %>% as_tibbl
 
 ```
 
-# Get genes for private and shared ROHs
+These are the final ROH I will be working on, export them
 
-```{r gene_set_scc}
+```{r export_final_ROH}
+saveRDS(private_LW_minN_merged_GTE100bp, here("00_analysis/data/26_ROH_SOSFERT_samples","private_LW_minN_merged_GTE100bp.rds"))
 
-ssc_gene_set <- readRDS(here("ref_ensemble95/gene_set/ssc_gene_set.rds"))
+saveRDS(private_PI_minN_merged_GTE100bp, here("00_analysis/data/26_ROH_SOSFERT_samples","private_PI_minN_merged_GTE100bp.rds"))
+
+saveRDS(shared_LWminN_PIminN_merged_GTE100bp, here("00_analysis/data/26_ROH_SOSFERT_samples","shared_LWminN_PIminN_merged_GTE100bp.rds"))
 
 ```
+
+
+# Get genes for private and shared ROHs
 
 ```{r genes_in_rohs}
 

@@ -1,0 +1,97 @@
+---
+title: "ROH+SV analysis - SOSFERT samples"
+output: 
+  html_document:
+    toc: 5
+    code_folding: show
+---
+
+
+```{r libraries,  include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(here)
+library(tidyverse)
+library(vroom)
+library(knitr)
+library(GenomicRanges)
+```
+
+# Import ROH data
+
+Recall these are consensus ROHs grouped into private and shared. Each consensus ROH is a stretch of homozygosity of at least 100bp observed in at least 8 pigs per breed.
+
+```{r}
+
+private_LW_minN_merged_GTE100bp <- readRDS(here("00_analysis/data/26_ROH_SOSFERT_samples","private_LW_minN_merged_GTE100bp.rds"))
+
+private_PI_minN_merged_GTE100bp <- readRDS(here("00_analysis/data/26_ROH_SOSFERT_samples","private_PI_minN_merged_GTE100bp.rds"))
+
+shared_LWminN_PIminN_merged_GTE100bp <- readRDS(here("00_analysis/data/26_ROH_SOSFERT_samples","shared_LWminN_PIminN_merged_GTE100bp.rds"))
+
+```
+
+
+
+
+# Import SV data
+
+Recall Lorena provided two lists with SVs overlapping genes (genic) for each breed.
+
+We are interested in those that are fixed and that are private or shared in or by each breed.
+
+```{r}
+sv_genic_lw <- here("../../../../Lorena_SVs/pig","Large_white_SVs.txt") %>% vroom(col_types = c("No_of_genes" = "n"))
+
+sv_genic_pi <- here("../../../../Lorena_SVs/pig","Pietrain_SVs.txt") %>% vroom(col_types = c("No_of_genes" = "n"))
+```
+
+## Get private and shared SVs
+```{r}
+sv_genic_lw_fixed_private <- sv_genic_lw %>% filter(`SV status` == "private", Zygosity == "1/1")
+
+sv_genic_pi_fixed_private <- sv_genic_pi %>% filter(`SV status` == "private", Zygosity == "1/1")
+
+sv_genic_shared <- inner_join(
+  sv_genic_lw %>% filter(`SV status` == "shared", Zygosity == "1/1"),
+  sv_genic_pi %>% filter(`SV status` == "shared", Zygosity == "1/1"),
+  by = c("Chr", "SV_start", "SV_end")
+  )
+```
+
+## Convert to granges
+```{r}
+fx_convert_SVs_to_granges <- function(dat){
+  
+  dat %>% 
+    dplyr::rename(seqnames = Chr, start = SV_start, end = SV_end) %>% 
+    dplyr::select(seqnames, start, end, everything()) %>% 
+    makeGRangesFromDataFrame(keep.extra.columns = TRUE) %>% 
+    sort()
+  
+  }
+
+
+sv_genic_lw_fixed_private_gr <- fx_convert_SVs_to_granges(sv_genic_lw_fixed_private)
+sv_genic_pi_fixed_private_gr <- fx_convert_SVs_to_granges(sv_genic_pi_fixed_private)
+sv_genic_shared_gr <- fx_convert_SVs_to_granges(sv_genic_shared)
+
+```
+
+
+
+# Is there any overlap between ROHs and SVs?
+
+In theory, ROHs and SVs should occur separately. 
+
+```{r}
+# suppress warnings about query and subject having different sets of chromosomes.
+subsetByOverlaps(private_LW_minN_merged_GTE100bp, sv_genic_lw_fixed_private_gr) %>% suppressWarnings()
+
+subsetByOverlaps(private_PI_minN_merged_GTE100bp, sv_genic_pi_fixed_private_gr) %>% suppressWarnings()
+
+subsetByOverlaps(shared_LWminN_PIminN_merged_GTE100bp, sv_genic_shared_gr) %>% suppressWarnings()
+```
+
+As expected, there are no overlaps between ROHs and SVs.
+
