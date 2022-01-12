@@ -263,6 +263,23 @@ ggplot(fractions, aes(x = breed, y = mean, fill = roh_class)) +
 
 ```
 
+Export for WGCALP paper
+```{r eval = FALSE}
+png(filename = here("00_analysis/figures", "WCGALP_fig1.png"), width = 2000, height = 600, units = "px", res = 300)
+
+ggplot(fractions, aes(x = breed, y = mean, fill = roh_class)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = errors_lower, ymax = errors_upper), position =  position_dodge2(width = 0.5, padding = 0.5)) +
+  theme_bw(base_size = 12) +
+  xlab(NULL) +
+  ylab("FROH (mean ± sd)") +
+  scale_fill_brewer(palette="Dark2") +
+  scale_y_continuous(breaks = seq(0,1,0.1), expand = c(0.01,0.01)) +
+  theme(legend.title = element_blank(), plot.title = element_text(hjust = 0.5))
+
+dev.off()
+```
+
 # Genes in RoH
 
 ## Get gene lists for each sample
@@ -588,7 +605,7 @@ rrvgo_prep_PI$enrichr_res %>% DT::datatable(rownames = FALSE)
 After manual inspection, the following terms appeared: muscle, myoblast and sarcomere. This makes sense for pietrain.
 
 ```{r}
-rrvgo_prep_PI$enrichr_res %>% as_tibble() %>% filter(grepl("muscle|myoblast|sarcomere", Term), !grepl("cardiac|smooth", Term)) %>% 
+rrvgo_prep_PI$enrichr_res %>% as_tibble() %>% filter(grepl("muscle|myoblast|sarcomere|myosin", Term), !grepl("cardiac|smooth", Term)) %>% 
   kable(digits = 2)
 ```
 
