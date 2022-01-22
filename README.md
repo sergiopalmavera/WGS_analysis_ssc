@@ -1,3 +1,5 @@
-This repository contains the code to process ssc data from the SOSFERT project (internal data set) and to process external data from external sources.
+This repository contains the code to process pig WGS data, consisting of two breeds (Large White and Pietrain).
 
-Readme file still incomplete...
+The repostory contains all steps to process and align reads, call variants and population genomic analysis.
+
+Data outputs of each of the three main steps mentioned above are integrated in the "00_analysis" directory using R, in markdown format.
